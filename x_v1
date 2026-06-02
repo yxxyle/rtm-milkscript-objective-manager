@@ -1,0 +1,3723 @@
+const formatDate = (date) => date ? `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}` : 'N/A';
+
+const formatDateTime = (date) => date ? `${formatDate(date)} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}` : 'N/A';
+
+const now = new Date();
+const jan_01_1970 = new Date(0);
+
+const weekdays = {
+    zh: ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'],
+    en: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+};
+
+const formatDateWithWeekday = (date, lang = 'zh') => {
+    if (!date || isNaN(date.getTime?.() ?? new Date(date).getTime())) return 'N/A';
+    const weekday = weekdays[lang]?.[date.getDay()] ?? '星期日';
+    return `${formatDate(date)} ${weekday}`;
+};
+
+const formatDateTimeWithWeekday = (date, lang = 'zh') => {
+    if (!date || isNaN(date.getTime?.() ?? new Date(date).getTime())) return 'N/A';
+    const weekday = weekdays[lang]?.[date.getDay()] ?? '星期日';
+    return `${formatDateTime(date)} ${weekday}`;
+};
+
+const CONFIG = {
+    PROMPTS: {
+    },
+    TAGS: {
+        COMPLETED_STATUS: ['2.4-done', '2.7-cancelled', '2.8-closed', '2.9-failed', '2.10-abandon', '2.12-unproductive', '2.13-reduced', '2.14-lost'],
+        OBJECTIVE_TYPES: ['1.1-🔭', '1.2-🗽', '1.3-🎯', '1.4-⛳', '1.5-📌', '1.10-🎉'],
+        DEFAULT_OBJECTIVE_TYPE: '1.10-🎉',
+        // SEARCH_OPERATOR_ACTION: ['6.1-due', '6.2-start', '6.3-completed', '6.4-added', '6.5-updated'],
+        SEARCH_OPERATOR_ACTION: ['6.1-due'],
+        // SEARCH_OPERATOR_MODIFIER: ['7.1-before', '7.2-after', '7.3-within'],
+        SEARCH_OPERATOR_MODIFIER: ['7.1-before'],
+        SEARCH_TIME_UNIT: ['8.1-day', '8.2-week', '8.3-month', '8.4-season', '8.5-half', '8.6-year'],
+        SCRIPT_ERROR: 'script-error',
+        SCRIPT_REPORT: 'script-report'
+    },
+    NOTE_PREFIX: {
+        SUMMARY_NOTE: "summary", // NEW: 用于识别摘要笔记的前缀
+    },
+    DELIMITERS: {
+        VERTICAL_DASH_LINE: " ┊ ",
+        PANEL_DELIMITER: "≡",
+        SECTION_DELIMITER: "=",
+        BLOCK_DELIMITER: "-",
+    },
+    CHAR_TO_REMOVE_FROM_NAME: ["(", ")"],
+    ASSISTED_TASKS: {
+        NAME_FOR_OBJECTIVES_SUMMARY: '目标的安排-进度-饱和度信息'
+    },
+    SMART_LIST: {
+        SEARCH_OPERATORS: {
+            DUE: 'due',
+            DUE_BEFORE: 'dueBefore',
+        },
+        SEARCH_TIME_UNIT_NAMES: {
+            'day': { 0: '今日', 1: '明日' },
+            'week': { 0: '本周', 1: '一周后' },
+            'month': { 0: '本月', 1: '一个月后' }, // 或者 "30天后"
+            'season': { 0: '本季度', 1: '一个季度后' }, // 或者 "一季后"
+            'half': { 0: '本半年', 1: '半年后' },
+            'year': { 0: '今年', 1: '一年后' }
+        },
+        LIST_NAME_SUFFIX: '🎯🔍',
+        // ✅ 新增：多视图配置
+        // Key 必须与 SEARCH_TIME_UNIT_NAMES 中的 Value 完全一致
+        // Value 是您希望在导航栏不同位置看到的前缀
+        MULTI_VIEWS: {
+            '本周': [
+                '☀️-今日计划',
+                '🌙-明日计划',
+                '🗓️-每周计划',
+                '👀-每周回顾'
+            ],
+            // '本月': [
+            //     '📅-月度概览',
+            //     '🧘-月度复盘'
+            // ]
+            // 您可以随时添加 '今年': ['...', '...']
+        }
+    },
+    /**
+     * @typedef {Object} WorkConfig
+     * @property {number} startHour - 工作日开始小时 (24小时制).
+     * @property {number} endHour - 工作日结束小时 (24小时制).
+     * @property {number[]} workingDays - 工作日定义 (1=周一, 2=周二, ..., 6=周六, 0=周日).
+     * @property {string[]} holidays - 节假日日期字符串数组 (格式: 'YYYY-MM-DD').
+     */
+    WORKDAY_CONFIG: {
+        startHour: 9,
+        endHour: 18,
+        workingDays: [1, 2, 3, 4, 5], // 周一到周五
+        holidays: [], // 未来可在此处添加节假日, e.g., ['2025-10-01']
+    },
+    NUM_OF_DAYS_AS_HISTORY: 30,
+    SPECIAL_CHARS: {
+        EMPTY_STRING: ''
+    },
+};
+
+// 定义效率比率的 5 种来源状态
+const RATIO_SOURCE = {
+    // 1. 最理想状态：基于当前目标已完成任务的实测数据
+    LOCAL: {
+        id: 'LOCAL',
+        icon: '🎯',
+        desc: '基于自身实测'
+    },
+    // 2. 次理想状态：样本不足(<2)，但有该目标的全局历史数据可参考
+    GLOBAL_HISTORY: {
+        id: 'GLOBAL_HISTORY',
+        icon: '🌐',
+        desc: '样本不足，参考全局历史'
+    },
+    // 3. 兜底状态：样本不足，且无全局历史（新目标/新系统），使用默认值 1.0
+    GLOBAL_FALLBACK: {
+        id: 'GLOBAL_FALLBACK',
+        icon: '🛡️',
+        desc: '无数据，使用默认兜底'
+    },
+    // 4. 熔断修正（高质量）：自身数据异常，回退到可信的全局历史
+    CIRCUIT_BREAKER_HISTORY: {
+        id: 'BREAKER_HISTORY',
+        icon: '💥🌐',
+        desc: '数据异常熔断，回退至全局历史'
+    },
+    // 5. 熔断修正（低质量）：自身数据异常，且无全局历史，被迫回退到 1.0
+    CIRCUIT_BREAKER_FALLBACK: {
+        id: 'BREAKER_FALLBACK',
+        icon: '💥🛡️',
+        desc: '数据异常且无历史，回退至默认'
+    }
+};
+
+// === ⚙️ 配置区 (建议放在脚本顶部 CONFIG 内) ===
+const OVERTIME_CONFIG = {
+    EFFICIENCY_FACTOR: 0.8, // 疲劳折损：加班1小时 ≈ 0.8小时产出
+    LATE_THRESHOLD: 21      // 熔断阈值：超过21点，今天不再算作有效加班日
+};
+
+/**
+ * 安全获取全局比率
+ * 融合了上游计算时的 Fallback 标记和本地的类型检查
+ * 
+ * @param {Object} objContext - 目标汇总信息 (来自 buildObjectivesContext)
+ * @returns {{value: number, isFallback: boolean}}
+ */
+const getSafeGlobalRatio = (objContext) => {
+    const rawRatio = objContext?.globalWorkRatio;
+    const isUpstreamFallback = objContext?.globalWorkRatio_fallback === true;
+    const isValidNumber = typeof rawRatio === 'number' && rawRatio > 0.1;
+
+    return {
+        value: isValidNumber ? rawRatio : 1.0,
+
+        isFallback: isUpstreamFallback || !isValidNumber
+    };
+};
+
+const isUsingTestList = rtm.args['z.🧪 使用测试列表？'];
+
+// quick test here
+// console.log(calculateWorkingMinutesBetween(now, new Date(now.getTime() + 54 * 60 * 60 * 1000), CONFIG.WORKDAY_CONFIG))
+// const start = new Date()
+// start.setHours(17, 59, 1, 0)
+// const minutes2add = 20
+// console.log(addWorkingMinutes(start, minutes2add, CONFIG.WORKDAY_CONFIG));
+
+main();
+
+function main() {
+    // ============================================================
+    // 1. 读取 RTM 参数 (Key 必须与脚本定义完全一致)
+    // ============================================================
+    // 布尔开关：用于快速生成报告
+    const isReportToday = rtm.args['a.💥 快捷：生成【今日】报告？'];
+    const isReportWeek = rtm.args['b.💥 快捷：生成【本周】报告？'];
+    const isReportNext1Week = rtm.args['c.🗓 快捷：生成【一周后】报告？'];
+    const isReportMonth = rtm.args['d.🗓 快捷：生成【本月】报告？'];
+
+    // 手动参数：用于自定义查询
+    // 注意：specifiedDueDate 在逻辑处理中可能会被置空，所以用 let
+    let specifiedDueDate = rtm.args['e.📆 (可选) 指定基准截止日期'];
+
+    // 原始的手动偏移输入
+    const rawOffsetNum = rtm.args['f.🔢 (高级) 偏移数值 (0=本周期末)'];
+    const rawOffsetUnit = rtm.args['g.📐 (高级) 偏移单位 (Tag)'];
+    const isReportTomorrow = rtm.args['h.💥 快捷：生成【明日】报告？'];
+    const isReportNext1Month = rtm.args['i.🈷️ 快捷：生成【一个月后】报告？'];
+
+    // 配置参数
+    const actionTag = rtm.args['x.🔧 (底层) 查询动作 (Due/Start)'];
+    const modifierTag = rtm.args['y.🔧 (底层) 查询修饰 (Before/After)'];
+
+    // ============================================================
+    // 2. 优先级仲裁与参数标准化 (关键逻辑)
+    // ============================================================
+
+    // 准备传给 handleOffset 的标准化参数
+    let finalOffsetNumStr = rawOffsetNum;
+    let finalOffsetUnitTag = rawOffsetUnit;
+
+    // 辅助函数：创建一个伪造的 Tag 对象
+    // handleOffset 内部调用了 tag.getName()，我们必须模拟这个接口
+    const createMockTag = (tagName) => ({ getName: () => tagName });
+
+    // 🏆 优先级 1: 快捷开关 (布尔值)
+    // 逻辑：只要勾选了任意快捷键，忽略所有手动日期和偏移设置
+    if (isReportToday) {
+        console.log("🚀 模式启动: 快捷-今日");
+        specifiedDueDate = null; // 强制使用当前时间为基准
+        finalOffsetNumStr = "0";
+        // 必须匹配 CONFIG.TAGS.SEARCH_TIME_UNIT 中的字符串
+        finalOffsetUnitTag = createMockTag("8.1-day");
+    } else if (isReportTomorrow) {
+        console.log("🚀 模式启动: 快捷-明日");
+        specifiedDueDate = null; // 强制使用当前时间为基准
+        finalOffsetNumStr = "1";
+        // 必须匹配 CONFIG.TAGS.SEARCH_TIME_UNIT 中的字符串
+        finalOffsetUnitTag = createMockTag("8.1-day");
+    }
+    else if (isReportWeek) {
+        console.log("🚀 模式启动: 快捷-本周");
+        specifiedDueDate = null;
+        finalOffsetNumStr = "0";
+        finalOffsetUnitTag = createMockTag("8.2-week");
+    }
+    else if (isReportNext1Week) {
+        console.log("🚀 模式启动: 快捷-一周后");
+        specifiedDueDate = null;
+        finalOffsetNumStr = "1";
+        finalOffsetUnitTag = createMockTag("8.2-week");
+    }
+    else if (isReportMonth) {
+        console.log("🚀 模式启动: 快捷-本月");
+        specifiedDueDate = null;
+        finalOffsetNumStr = "0";
+        finalOffsetUnitTag = createMockTag("8.3-month");
+    }
+    else if (isReportNext1Month) {
+        console.log("🚀 模式启动: 快捷-一个月后");
+        specifiedDueDate = null;
+        finalOffsetNumStr = "1";
+        finalOffsetUnitTag = createMockTag("8.3-month");
+    }
+    // 🏆 优先级 2: 手动指定日期
+    else if (specifiedDueDate) {
+        console.log(`🚀 模式启动: 手动指定日期 [${formatDate(specifiedDueDate)}]`);
+        // 当指定了绝对日期，且没有偏移量时，清空偏移参数，防止 handleOffset 误判
+        if (!rawOffsetNum || rawOffsetNum.trim() === "") {
+            finalOffsetNumStr = null;
+            finalOffsetUnitTag = null;
+        }
+    }
+    // 🏆 优先级 3: 手动偏移设置 (检查是否有有效输入)
+    else if (rawOffsetNum !== undefined && rawOffsetNum !== null && rawOffsetNum.trim() !== "") {
+        console.log("🚀 模式启动: 手动偏移设置");
+        // 保持用户输入的 rawOffsetNum 和 rawOffsetUnit 不变
+    }
+    // 🏆 优先级 4: 默认兜底 (用户直接点击运行，什么都没填)
+    else {
+        console.log("🚀 模式启动: 默认兜底 (自动生成本周报告)");
+        finalOffsetNumStr = "0";
+        finalOffsetUnitTag = createMockTag("8.2-week");
+    }
+
+    // ============================================================
+    // 3. 执行核心逻辑
+    // ============================================================
+
+    // 构建 Operator (例如 dueBefore)
+    const operator = constructOperator(actionTag, modifierTag);
+
+    // 确定基准日期 (如果 specifiedDueDate 被置空，handleOffset 内部会自动取 now)
+    const baseDate = specifiedDueDate;
+
+    // 调用业务逻辑
+    // 注意：这里传入的是我们经过仲裁后的 final 参数
+    const offsetResult = handleOffset(finalOffsetNumStr, finalOffsetUnitTag, operator, baseDate);
+
+    if (offsetResult.error) {
+        return rtm.newMessage(
+            `参数错误`,
+            `${offsetResult.error}\n请检查偏移数值是否为数字。`
+        );
+    }
+
+    console.log(`[Main] 最终执行: ${offsetResult.operator} ${formatDateTime(offsetResult.targetDate)} (${offsetResult.periodName || '自定义周期'})`);
+
+    // 生成列表与报告
+    return listDetailsOfObjective(offsetResult.operator, offsetResult.targetDate, offsetResult.periodName);
+}
+
+function handleOffset(offsetNumberStr, offsetUnitTag, currentOperator, currentTargetDate) {
+    // 1. 快速检查
+    if (!offsetNumberStr || offsetNumberStr.trim() === CONFIG.SPECIAL_CHARS.EMPTY_STRING) {
+        return {
+            operator: currentOperator,
+            targetDate: currentTargetDate,
+            error: null,
+            periodName: null // 新增返回值
+        };
+    }
+
+    const offsetNumber = parseInt(offsetNumberStr);
+
+    // 2. 错误检查
+    if (isNaN(offsetNumber)) {
+        return {
+            operator: currentOperator,
+            targetDate: currentTargetDate,
+            error: `你的输入 "${offsetNumberStr}" 不合法，请输入有效的数字。`,
+            periodName: null
+        };
+    }
+
+    // 3. 执行偏移逻辑
+    const baseDate = currentTargetDate ? new Date(currentTargetDate) : now;
+
+    // 解析单位 (提取出来以便复用)
+    let unit = 'day';
+    if (offsetUnitTag) {
+        unit = getSuffixIfExist(offsetUnitTag.getName(), CONFIG.TAGS.SEARCH_TIME_UNIT) || 'day';
+    }
+
+    console.log(`[handleOffset] 检测到偏移设置: 基准 ${formatDate(baseDate)} + ${offsetNumber} ${unit}`);
+
+    // 计算新日期
+    // 注意：calculateOffsetDate 内部也会解析一遍 unit，但这不影响
+    const newTargetDate = calculateOffsetDate(baseDate, offsetNumber, offsetUnitTag);
+
+    // 强制锁定操作符
+    const newOperator = CONFIG.SMART_LIST.SEARCH_OPERATORS.DUE_BEFORE;
+
+    // === 新增：生成固定周期名称逻辑 ===
+    let periodName = null;
+    // 获取配置中的名称映射表
+    const unitNames = CONFIG.SMART_LIST.SEARCH_TIME_UNIT_NAMES[unit];
+    if ((offsetNumber === 0 || offsetNumber === 1) && (unitNames && unitNames[offsetNumber] !== undefined)) {
+        // 如果偏移量为0，说明是锚定到当前周期的末尾
+        // 从 CONFIG 映射中获取中文名 (例如 'week' -> '本周')
+        periodName = unitNames[offsetNumber];
+    }
+
+    console.log(`[handleOffset] 重新计算后的 targetDate: ${formatDateTime(newTargetDate)}(new target date都自动设置为当天的最后一刻), 操作符: ${newOperator}, 周期名: ${periodName}`);
+
+    return {
+        operator: newOperator,
+        targetDate: newTargetDate,
+        error: null,
+        periodName: periodName // 返回这个名称供 main 使用
+    };
+}
+
+/**
+ * 基于基准日期计算偏移或锚定后的日期
+ * @param {Date} baseDate - 基准锚点日期
+ * @param {number} amount - 偏移数值 (必须是数字，由外部 parseInt 保证)
+ * @param {Object} unitTag - 偏移单位标签对象 (例如 8.2-week)
+ * @returns {Date} 计算后的新日期 (时间已设为 23:59:59)
+ */
+function calculateOffsetDate(baseDate, amount, unitTag) {
+    // 1. 复制日期对象，避免污染
+    const newDate = new Date(baseDate);
+
+    // 2. 解析单位，默认为 'day'
+    let unit = 'day';
+    if (unitTag) {
+        unit = getSuffixIfExist(unitTag.getName(), CONFIG.TAGS.SEARCH_TIME_UNIT) || 'day';
+    }
+
+    // === 逻辑分支 A: 锚定当前周期末尾 (Amount == 0) ===
+    if (amount === 0) {
+        switch (unit) {
+            case 'week':
+                // 逻辑：找到本周的周五 (假设周日是每周第一天)
+                const dayOfWeek = newDate.getDay();
+                const daysUntilFriday = 5 - dayOfWeek;
+                newDate.setDate(newDate.getDate() + daysUntilFriday);
+                break;
+
+            case 'month':
+                // 1. 设为本月最后一天 (下个月第0天)
+                newDate.setMonth(newDate.getMonth() + 1, 0);
+                break;
+
+            case 'season':
+                // 1. 找到本季度的最后一个月份 (2, 5, 8, 11)
+                const currentMonth = newDate.getMonth();
+                const endMonthOfSeason = Math.floor(currentMonth / 3) * 3 + 2;
+                // 2. 设为该月最后一天
+                newDate.setMonth(endMonthOfSeason + 1, 0);
+                break;
+
+            case 'half':
+                // 1. 找到半年的最后一个月份 (5, 11)
+                const monthIndex = newDate.getMonth();
+                const endMonthOfHalf = monthIndex < 6 ? 5 : 11;
+                // 2. 设为该月最后一天
+                newDate.setMonth(endMonthOfHalf + 1, 0);
+                break;
+
+            case 'year':
+                // 1. 设为今年12月31日
+                newDate.setMonth(11, 31);
+                break;
+
+            case 'day':
+            default:
+                // 就是今天，不做日期变动
+                break;
+        }
+    }
+    // === 逻辑分支 B: 相对时间偏移 (Amount > 0) ===
+    else {
+        switch (unit) {
+            case 'week':
+                newDate.setDate(newDate.getDate() + (amount * 7));
+                break;
+            case 'month':
+                newDate.setMonth(newDate.getMonth() + amount);
+                break;
+            case 'season':
+                newDate.setMonth(newDate.getMonth() + (amount * 3));
+                break;
+            case 'half':
+                newDate.setMonth(newDate.getMonth() + (amount * 6));
+                break;
+            case 'year':
+                newDate.setFullYear(newDate.getFullYear() + amount);
+                break;
+            case 'day':
+            default:
+                newDate.setDate(newDate.getDate() + amount);
+                break;
+        }
+    }
+
+    // 3. 【关键修正】将时间设置为当天的最后一秒
+    // 确保 dueBefore 查询能包含当天的任务
+    newDate.setHours(23, 59, 59, 999);
+
+    return newDate;
+}
+
+/**
+ * 辅助函数：将给定日期调整为该日期所在（或之前）的最后一个星期六
+ * 算法：targetDate - (targetDate.day + 1) % 7
+ */
+function moveToLastSaturday(dateObj) {
+    const day = dateObj.getDay(); // 0(Sun) ... 6(Sat)
+
+    // 计算回退天数
+    // 周六(6) -> (6+1)%7 = 0 (不变)
+    // 周五(5) -> (5+1)%7 = 6 (回退6天)
+    // 周日(0) -> (0+1)%7 = 1 (回退1天)
+    const daysToSubtract = (day + 1) % 7;
+
+    dateObj.setDate(dateObj.getDate() - daysToSubtract);
+}
+
+/**
+ * 根据两个下拉框的值生成组合查询键
+ * @param {string|null|undefined} actionTag - 第一个下拉框的值 (due, start, etc.)
+ * @param {string|null|undefined} modifierTag - 第二个下拉框的值 (before, after, etc.)
+ * @returns {string} 组合后的驼峰命名字符串
+ */
+function constructOperator(actionTag, modifierTag) {
+    // 1. 参数归一化与默认值处理
+    // 使用逻辑或 (||) 处理 null, undefined 和 空字符串 ""
+    const base = actionTag === undefined ? "due" : getSuffixIfExist(actionTag.getName(), CONFIG.TAGS.SEARCH_OPERATOR_ACTION);
+    const suffix = modifierTag === undefined ? CONFIG.SPECIAL_CHARS.EMPTY_STRING : getSuffixIfExist(modifierTag.getName(), CONFIG.TAGS.SEARCH_OPERATOR_MODIFIER);
+
+    // 2. 核心组合逻辑
+    if (suffix === CONFIG.SPECIAL_CHARS.EMPTY_STRING) {
+        // 如果第二个下拉框为空，直接返回第一个下拉框的值（或其默认值）
+        return base;
+    }
+
+    // 3. 驼峰命名处理 (Capitalization)
+    // charAt(0) 安全地获取首字母，slice(1) 获取剩余部分
+    // 即使 suffix 只有一个字母，slice(1) 也会返回空字符串，不会报错
+    const capitalizedSuffix = suffix.charAt(0).toUpperCase() + suffix.slice(1);
+
+    return base + capitalizedSuffix;
+}
+
+/**
+ * 如果输入字符串存在于数组中，返回其 '-' 之后的部分
+ * @param {string} candidate - 输入的字符串
+ * @returns {string|null} - 找到则返回后缀，未找到返回 null
+ */
+function getSuffixIfExist(candidate, options) {
+    // 1. 检查输入是否存在于数组中
+    if (options.includes(candidate)) {
+        // 2. 找到分隔符的位置
+        const separatorIndex = candidate.indexOf('-');
+
+        // 3. 截取分隔符之后的所有字符
+        // 使用 substring 比 split 更安全，防止后缀中本身包含 '-' (例如 '6.x-re-added')
+        return candidate.substring(separatorIndex + 1);
+    }
+
+    // 如果不在数组中，返回 null (或者你想要的默认值)
+    return null;
+}
+
+/**
+ * 查询指定日期前的所有目标，并创建一个包含这些目标相关任务的智能列表。
+ * @operator - due, dueBefore, dueAfter, dueWithin
+ * * @param {Date} [specifiedDueDate] - 指定的截止日期。
+ * @returns {rtm.SmartList|rtm.Message}
+ */
+function listDetailsOfObjective(operator, specifiedDueDate, selectedPeriodName = null) {
+    // 1. 参数处理：如果没有提供日期，则使用下一个周六
+    let targetDate = specifiedDueDate;
+    let periodName = selectedPeriodName;
+    console.log(`[listDetailsOfObjective] params[operator = ${operator}, targetDate = ${targetDate}, periodName = ${periodName}]`)
+
+    let defaultListName = null;
+    if (periodName) {// if periodName is not null, then targetDate is not null because it was calculated.
+        // 格式：✨-本周-目标明细-脚本动态更新
+        // 你可以根据喜好调整前缀，比如这里统一用 tdp (Today Plan) 还是根据周期变？
+        // 假设统一用 tdp 或者 wp，这里暂用 tdp 前缀保持一致，或者去掉前缀
+        defaultListName = `✨-${periodName}-${CONFIG.SMART_LIST.LIST_NAME_SUFFIX}`;
+        console.log(`[listDetailsOfObjective] 用户指定了periodName = ${periodName}, 计算所得的targetDate = ${targetDate}, defaultListName = ${defaultListName}`);
+    }
+
+    if (!targetDate) {// when targetDate is null, the periodName is null, set default periodName as '本周'
+        // 使用getNextDayOfWeek, 5 代表周五
+        targetDate = getNthNextDayOfWeek(5, 1, now, true);
+        periodName = '本周';
+        defaultListName = `✨-${periodName}-${CONFIG.SMART_LIST.LIST_NAME_SUFFIX}`;
+
+        console.log(`[listDetailsOfObjective] 用户未指定targetDate, 使用默认兜底的targetDate = ${targetDate}(从现在开始算的下一个周五), periodName = ${periodName}, defaultListName = ${defaultListName}`);
+    }
+
+    if (!periodName) {
+        periodName = formatDate(targetDate)
+    }
+
+    console.log(`[listDetailsOfObjective] 最终确定的参数: targetDate = ${targetDate}, periodName = ${periodName}, defaultListName = ${defaultListName}`);
+
+    // 2. 查询该日期及之前的所有目标任务
+    const objectivesQuery = constructObjectivesQuery(operator, targetDate);
+    const objectiveTasks = rtm.getTasks(objectivesQuery);
+
+    if (objectiveTasks.length === 0) {
+        return rtm.newMessage('提示', `未找到${operator}于${targetDate}的任何目标任务。`);
+    }
+
+    // 3. 提取目标标签并进行校验
+    const validGoalTags = new Set();
+    const tasksWithInvalidTag = [];
+    const validObjectiveTasks = new Set();
+
+    objectiveTasks.forEach(task => {
+        const [hasTag, goalTag] = findOwnGoalTag(task);
+
+        if (hasTag && goalTag) {
+            validGoalTags.add(goalTag.getName());
+            validObjectiveTasks.add(task);
+        } else {
+            tasksWithInvalidTag.push(task);
+        }
+    });
+
+    // 如果发现目标任务没有正确配置目标标签
+    if (tasksWithInvalidTag.length > 0) {
+        // 1. 构建易读的笔记内容
+        // 建议使用换行符分隔任务名和链接，视觉上更清晰
+        const noteContentDetails = tasksWithInvalidTag.map(task =>
+            `🔴 ${task.getName()}\n🔗 ${task.getPermalink()}`
+        ).join("\n\n"); // 任务之间空一行
+
+        const errorNoteHeader = `检测到 ${tasksWithInvalidTag.length} 个目标缺少有效标签前缀（0_ 或 99_）。\n请点击下方链接逐一跳转修正，修正后请完成或删除此任务：\n${CONFIG.DELIMITERS.VERTICAL_DASH_LINE.repeat(10)}\n`;
+
+        const fullNoteContent = errorNoteHeader + noteContentDetails;
+        const taskTitle = `⚠️ 需修正：${tasksWithInvalidTag.length}个无效的目标标签 @ ${formatDateTime(new Date())}`;
+
+        // 2. 调用保存任务的函数 (建议存到 Inbox 或显眼列表，而不是回收站)
+        const permalink = reportErrorToTask(taskTitle, fullNoteContent);
+
+        // 3. 返回一个简单的提示，告知用户去哪里看详情，并终止脚本运行
+        return rtm.newMessage(
+            `⛔ 脚本已停止`,
+            `发现 ${tasksWithInvalidTag.length} 个目标标签格式错误。\n\n已为您生成了一条名为：\n【${taskTitle}】\n的待办任务。\n\n请前往该任务的“笔记(Note)”中查看详情并点击链接修复。\n${permalink}`
+        );
+    }
+
+    // 4. 创建智能列表
+    if (validGoalTags.size > 0) {
+
+        // 构建 filter：将所有目标标签用 OR 连接
+        // 例如：tag:0_2025-10-01_task1 OR tag:0_2025-10-05_task2
+        let smartListFilter = Array.from(validGoalTags)
+            .map(tagName => `tag:"${tagName}"`)
+            .join(" OR ");
+
+        // console.log(smartListFilter)
+        // filter out tasks without due date, and use dueBefore to collect objective itself, since objective due date only has day part
+        smartListFilter = constructSmartListFilter(operator, targetDate, smartListFilter)
+        console.log(`[listDetailsOfObjective] SmartList Filter = ${smartListFilter}`)
+
+        // 检查是否已存在同名智能列表（可选逻辑，根据 RTM API 特性决定是否覆盖）
+        // 这里直接尝试创建。注意：在 MilkScript 中添加同名列表通常会返回已有列表或抛出异常
+        try {
+
+            const createdLists = [];
+            const multiViewPrefixes = CONFIG.SMART_LIST.MULTI_VIEWS[periodName];
+
+            // === 分支 A: 多视图模式 ===
+            if (multiViewPrefixes && multiViewPrefixes.length > 0) {
+                console.log(`[Mode] 多视图模式: 为 [${periodName}] 生成 ${multiViewPrefixes.length} 个列表`);
+
+                multiViewPrefixes.forEach(prefix => {
+                    // 命名格式: 前缀-周期名-固定后缀
+                    const fullName = `${prefix}-${periodName}-${CONFIG.SMART_LIST.LIST_NAME_SUFFIX}`;
+                    const list = createOrUpdateSmartList(fullName, smartListFilter);
+                    createdLists.push(list);
+                });
+            }
+            // === 分支 B: 单视图模式 (默认) ===
+            else {
+                console.log(`[Mode] 单视图模式`);
+                // 如果没有预定义名称（手动日期情况），则动态生成
+                if (defaultListName === null) { // due date was specified by user
+                    defaultListName = `${operator}于📅${formatDate(targetDate)}-${CONFIG.SMART_LIST.LIST_NAME_SUFFIX}`;
+                }
+                const list = createOrUpdateSmartList(defaultListName, smartListFilter);
+                createdLists.push(list);
+            }
+
+            // 1. 确定截止时间 (用于判断 Horizon)
+            const cutoffDateTime = new Date(targetDate);
+            cutoffDateTime.setHours(23, 59, 59, 999);
+
+            // ✅ 2. 【核心修改】优先运行自适应分析
+            // 这步操作非常关键：它相当于先给用户“把脉”，确定该看多少天的数据
+            const adaptiveStats = getAdaptiveAverageWorkhours(cutoffDateTime, periodName);
+            const validHistoryDays = adaptiveStats.daysUsed; // 获取“黄金天数” (例如 30)
+
+            console.log(`[System] 自适应分析完成: 周期截止=${formatDate(cutoffDateTime)}, 判定有效历史窗口=${validHistoryDays}天`);
+
+            // 5. 构建目标详细信息。
+            const objectivesContext = buildObjectivesContext(Array.from(validObjectiveTasks), validHistoryDays);
+            // console.log(objectivesContext);
+            generateObjectivesReport(objectivesContext, adaptiveStats, cutoffDateTime, periodName);
+
+            // 6. 返回结果消息
+            let resultTitle = `✅ 执行成功: ${periodName}`;
+            let resultBody = `已聚合 ${validGoalTags.size} 个目标。\n已同步更新 ${createdLists.length} 个智能列表视图。`;
+
+            // 如果只创建了一个列表，直接给出链接；如果多个，提示去侧边栏查看
+            if (createdLists.length === 1) {
+                resultBody += `\n🔗 列表链接: ${createdLists[0].getPermalink()}`;
+            } else {
+                resultBody += `\n📂 请在侧边栏查看包含 [${periodName}] 的智能列表。`;
+            }
+
+            return rtm.newMessage(resultTitle, resultBody);
+
+        } catch (e) {
+            throw new Error(`创建智能列表失败: ${e.message} => \n${e.stack}`);
+        }
+    } else {
+        return rtm.newMessage(`未能识别到任何有效的目标标签。`);
+    }
+}
+
+// ==========================================
+// 1. 公共工具函数 (Core Logic)
+// ==========================================
+
+/**
+ * 辅助函数：创建或更新智能列表
+ * @param {string} finalListName - 列表全名
+ * @param {string} filter - 过滤规则
+ * @returns {rtm.SmartList}
+ */
+function createOrUpdateSmartList(finalListName, filter) {
+    // 1. 尝试查找现有列表
+    const existingList = rtm.getSmartLists().find(list => list.getName() === finalListName);
+
+    if (existingList) {
+        console.log(`[SmartList] 更新现有列表: ${finalListName}`);
+        // 更新过滤规则
+        return existingList.setFilter(filter);
+    } else {
+        console.log(`[SmartList] 创建新列表: ${finalListName}`);
+        // 创建并设为收藏（防止被折叠）
+        return rtm.addSmartList(finalListName, filter).setFavorite(true);
+    }
+}
+
+/**
+ * 计算查询所需的日期字符串和最终操作符
+ * @param {string} operator - 原始操作符
+ * @param {Date} date - 目标日期
+ * @param {boolean} isStrictDate - true=Objectives查询(保留原op,日期格式); false=SmartList查询(op变变体,日期+时间)
+ */
+function resolveQueryParams(operator, date, isStrictDate = false) {
+    console.log(`[resolveQueryParams] 传入的operator是${operator}, 目标日期是${date}, 是否严格匹配日期是${isStrictDate}`);
+    const OPS = CONFIG.SMART_LIST.SEARCH_OPERATORS;
+
+    // 统一计算当天的最后一秒
+    const endOfTargetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59);
+
+    let finalOp = operator;
+    let finalDateStr = CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+
+    switch (operator) {
+        case OPS.DUE:
+            if (isStrictDate) {
+                // Objectives: 严格匹配日期 due:"2023-01-01"
+                finalDateStr = formatDate(date);
+                console.log(`[resolveQueryParams] when operator is ${OPS.DUE}, if isStrictDate is ${isStrictDate}, 严格匹配的日期是${finalDateStr}`);
+            } else {
+                // SmartList: 转换为 dueBefore:"2023-01-01 23:59:59"
+                finalOp = OPS.DUE_BEFORE;
+                finalDateStr = formatDateTime(endOfTargetDate);
+                console.log(`[resolveQueryParams] when operator is ${OPS.DUE}, if isStrictDate is ${isStrictDate}, 那么将operator强制转换为${finalOp}, 匹配的日期时间为${finalDateStr}`);
+            }
+            break;
+
+        case OPS.DUE_BEFORE:
+            // 两者都使用包含时间的格式
+            finalDateStr = formatDateTime(endOfTargetDate);
+            break;
+
+        default:
+            console.warn(`Unknown operator: ${operator}, defaulting to formatDate.`);
+            finalDateStr = formatDate(date);
+    }
+
+    return { op: finalOp, dateStr: finalDateStr };
+}
+
+// ==========================================
+// 2. 业务函数 (Refactored Functions)
+// ==========================================
+
+function constructSmartListFilter(operator, targetDate, initialFilter) {
+    // SmartList 模式: isStrictDate = false
+    console.log(`[constructSmartListFilter] 传入的operator是${operator}, targetDate是${targetDate}，不采取严格匹配日期模式`);
+    const { op: operatorVariant, dateStr: date2Query } = resolveQueryParams(operator, targetDate, false);
+    console.log(`[constructSmartListFilter] SmartList Query operatorVariant: ${operatorVariant}, and Date: ${date2Query}`);
+
+    const jionCompletedStatusWithOR = CONFIG.TAGS.COMPLETED_STATUS.map(tag => `tag:"${tag}"`).join(" OR ");
+
+    const smartListFilter = [
+        `(`,
+        `(${initialFilter})`,
+        `AND NOT due:never`,
+        `AND ${operatorVariant}:"${date2Query}"`,
+        `AND NOT (${jionCompletedStatusWithOR})`,
+        `)`,
+        `OR tag:${CONFIG.TAGS.SCRIPT_REPORT}`,
+        `OR tag:${CONFIG.TAGS.SCRIPT_ERROR}`,
+    ].join(" ");
+
+    return smartListFilter;
+}
+
+function constructObjectivesQuery(operator, targetDate) {
+    // Objectives 模式: isStrictDate = true
+    console.log(`[constructObjectivesQuery] 传入的operator是${operator}, targetDate是${targetDate}，并采取严格匹配日期模式`);
+    const { op: operatorVariant, dateStr: date2Query } = resolveQueryParams(operator, targetDate, true);
+    console.log(`[constructObjectivesQuery] Objectives Query operatorVariant: ${operatorVariant}, and Date: ${date2Query}`);
+
+    const objectiveTypesQuery = CONFIG.TAGS.OBJECTIVE_TYPES.map(tag => `tag:"${tag}"`).join(" OR ");
+
+    const objectivesQuery = [
+        `${isUsingTestList ? 'list: test_list' : 'NOT list:test_list'}`, // 注意：原代码这里有空格 "list: test_list"
+        `status:incomplete`,
+        `NOT start:never`,
+        `(${objectiveTypesQuery})`,
+        `${operatorVariant}:"${date2Query}"`
+    ].join(" AND ");
+
+    console.log(`[constructObjectivesQuery] objectivesQuery is ${objectivesQuery}`)
+    return objectivesQuery;
+}
+
+/**
+ * 获取“接下来的第 n 个指定星期几”的日期对象
+ * @param {number} dayOfWeek - 星期几 (0=周日, 1=周一, ..., 6=周六)
+ * @param {number} [n=1] - 第几个目标星期几（1 表示下一个）
+ * @param {Date} [baseDate=new Date()] - 可选基准日期
+ * @returns {Date}
+ */
+function getNthNextDayOfWeek(dayOfWeek, n = 1, baseDate = new Date(), includeToday = false) {
+    // 参数验证
+    if (typeof dayOfWeek !== 'number' || dayOfWeek < 0 || dayOfWeek > 6) {
+        throw new Error("Invalid dayOfWeek: must be an integer between 0 and 6.");
+    }
+    if (!Number.isInteger(n)) {
+        throw new Error("Invalid n: must be an integer.");
+    }
+
+    const date = new Date(baseDate);
+    const currentDay = date.getDay();
+
+    let diff;
+
+    if (n === 0) {
+        // throw new Error("n cannot be zero.");
+        return now;
+    }
+
+    if (n > 0) {
+        // 正向查找：未来第 n 个
+        diff = (dayOfWeek - currentDay + 7) % 7;
+        if (diff === 0 && !includeToday) {
+            diff += 7; // 如果是今天且 includeToday 为 false，则跳过今天
+        }
+
+        date.setDate(date.getDate() + diff + 7 * (n - 1));
+    } else {
+        // 负向查找：过去第 |n| 个
+        diff = (currentDay - dayOfWeek + 7) % 7;
+        if (diff === 0 && !includeToday) {
+            diff += 7;
+        }
+
+        date.setDate(date.getDate() - diff - 7 * (-n - 1));
+    }
+
+    return date;
+}
+
+function findOwnGoalTag(objective) {
+    // 获取标准化的目标名称
+    const dueDateStr = formatDate(objective.getDueDate());
+    const normalizedName = normalizeTaskName(objective.getName(), CONFIG.CHAR_TO_REMOVE_FROM_NAME);
+    const goalTag_open = `0_${dueDateStr}_${normalizedName}`;
+    const goalTag_close = `99_${dueDateStr}_${normalizedName}`;
+
+    // 检查目标是否有符合条件的标签
+    const foundGoalTag = objective.getTags().find(tag => {
+        return tag.getName() === goalTag_open || tag.getName() === goalTag_close
+    });
+
+    return [foundGoalTag !== undefined, foundGoalTag];
+}
+
+function normalizeTaskName(taskName, charsToRemove) {
+    let result = taskName.toLowerCase().replace(/\s/g, '-');
+    for (const char of charsToRemove) {
+        result = result.split(char).join(CONFIG.SPECIAL_CHARS.EMPTY_STRING);
+    }
+    return result;
+}
+
+function getRemainingNaturalDays(targetDateString) {
+    // 1. 获取当前时间
+    const today = new Date(now);
+    // 2. 解析目标日期
+    const target = new Date(targetDateString);
+
+    // 3. 关键步骤：将两个日期的时间部分都设为凌晨 0 点
+    // 这样可以确保我们计算的是完整的“天数”差异，而不是小时差异
+    today.setHours(0, 0, 0, 0);
+    target.setHours(0, 0, 0, 0);
+
+    // 4. 计算毫秒差 (目标日期 - 当前日期)
+    const diffInMs = target - today;
+
+    // 5. 将毫秒转换为天数
+    // 1天 = 24小时 * 60分钟 * 60秒 * 1000毫秒
+    const msInDay = 24 * 60 * 60 * 1000;
+    const diffInDays = diffInMs / msInDay;
+
+    return Math.floor(diffInDays);
+    // return Math.round(diffInDays);
+}
+
+/**
+ * 为每个选中的任务，独立地、高效地构建其专属的任务依赖图。
+ *
+ * 这是新的主入口函数，它完美地平衡了性能和需求。
+ *
+ * @returns {Map<Task, Map<Task, Set<Task>>>}
+ * 一个Map，键是最初选中的任务(selectedTask)，
+ * 值是该任务对应的、完整的依赖图(taskGraph)。
+ */
+function buildIndividualTaskGraphs(selectedTasks) {
+    if (selectedTasks.length === 0) {
+        throw new Error("没有选中的任务。");
+    }
+
+    // =================================================================
+    // 步骤 1: 一次性准备工作 (One-time Global Setup)
+    // =================================================================
+    // (性能优化) 将昂贵的API调用仅执行一次，获取所有可能被链接的子任务。
+    const tasksHaveUrl = rtm.getTasks('hasURL:true');
+
+    // (性能优化) 预处理数据，构建一个可供全局复用的、高效的URL查找映射。
+    const urlToChildrenMap = new Map();
+    for (const task of tasksHaveUrl) {
+        const parentUrl = task.getUrl();
+        if (parentUrl) {
+            if (!urlToChildrenMap.has(parentUrl)) {
+                urlToChildrenMap.set(parentUrl, []);
+            }
+            urlToChildrenMap.get(parentUrl).push(task);
+        }
+    }
+
+    // =================================================================
+    // 步骤 2: 重复性工作 (Per-Task Execution)
+    // =================================================================
+    // 用于存储最终结果，每个 selectedTask 对应一个 graph。
+    const results = new Map();
+
+    for (const startTask of selectedTasks) {
+        // 为每个选中的任务，调用单图构建函数。
+        // **关键**: 将预处理好的 urlToChildrenMap 作为参数传入，避免重复计算。
+        const individualGraph = buildSingleTaskGraph(startTask, urlToChildrenMap);
+        results.set(startTask, individualGraph);
+    }
+
+    return results;
+}
+
+/**
+ * 从一个指定的起始任务开始，构建其完整的、独立的依赖图。子任务包含直接子任务和由url关联的子任务。
+ *
+ * 此函数使用高效的广度优先搜索(BFS)算法，并利用预先计算好的全局资源。
+ *
+ * @param {Task} startTask - 构建图的起始节点。
+ * @param {Map<string, Task[]>} urlToChildrenMap - (共享资源) 预处理好的 URL -> 子任务列表的映射。
+ * @returns {Map<Task, Set<Task>>} 一个表示该起始任务依赖图的Map。
+ */
+function buildSingleTaskGraph(startTask, urlToChildrenMap) {
+    const taskGraph = new Map();
+    // 队列和已处理集合都只针对本次独立的图构建。
+    const processingQueue = [startTask];
+    const processedTasks = new Set([startTask]);
+
+    while (processingQueue.length > 0) {
+        const currentTask = processingQueue.shift();
+
+        if (!taskGraph.has(currentTask)) {
+            taskGraph.set(currentTask, new Set());
+        }
+
+        // 查找直接子任务
+        const directSubtasks = currentTask.getSubtasks() || [];
+        // 高效查找链接子任务 (复用全局Map)
+        const linkedSubtasks = urlToChildrenMap.get(currentTask.getPermalink()) || [];
+
+        const allChildren = [...directSubtasks, ...linkedSubtasks];
+
+        for (const child of allChildren) {
+            taskGraph.get(currentTask).add(child);
+
+            // 如果子任务在本次构建中是第一次遇到，则加入队列
+            if (!processedTasks.has(child)) {
+                processedTasks.add(child);
+                processingQueue.push(child);
+            }
+        }
+    }
+
+    return taskGraph;
+}
+
+/**
+ * 这里将由tag关联的子任务、objectiveTaskGraph中由直接子任务以及由url关联的子任务合并起来构成了objective的所有的子任务
+ */
+function assembleAllTasksOfObjective(objective, individualTaskGraphs) {
+    const goalTag = findOwnGoalTag(objective)[1]
+    // console.log(`goalTag is ${goalTag.getName()}`)
+
+    if (!goalTag) {
+        throw new Error(`Objective "${objective.getName()}" does not have a valid goalTag (starts with '0_' or '99_') to get tasks with goalTag but without parent task url.`);
+    }
+
+    const [objectiveTypeTag, objectiveEmoji] = getTaskTypeInfo(objective);
+
+    let allTasksWithTagButNotHaveUrl = []
+    if (objectiveTypeTag === CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE) {
+        allTasksWithTagButNotHaveUrl = goalTag.getTasks();
+    } else {
+        allTasksWithTagButNotHaveUrl = goalTag.getTasks('hasURL:false');
+    }
+
+    let objectiveTaskGraph = individualTaskGraphs.get(objective)
+    const allSubtasksOfObjective = mergeTasks(allTasksWithTagButNotHaveUrl, Array.from(objectiveTaskGraph.keys()))
+
+    return allSubtasksOfObjective
+}
+
+function getTaskTypeInfo(task) {
+    const [, typeTag] = findMatchingTag(task, CONFIG.TAGS.OBJECTIVE_TYPES, CONFIG.TAGS.DEFAULT_TASK_TYPE);
+    const emoji = typeTag.substring(typeTag.lastIndexOf("-") + 1);
+    return [typeTag, emoji];
+}
+
+function findMatchingTag(task, tagNames, defaultReturnTag = CONFIG.SPECIAL_CHARS.EMPTY_STRING) {
+    const taskTags = task.getTags();
+    const matchedTag = tagNames.find(tagName => taskTags.some(t => t.getName() === tagName));
+    return [!!matchedTag, matchedTag || defaultReturnTag];
+}
+
+function mergeTasks(primaryTasks, secondaryTasks) {
+    const remainingSecondaryTasks = []
+    for (const secondaryTask of secondaryTasks) {
+        const secondaryTaskName = secondaryTask.getName();
+        if (!containsTaskName(primaryTasks, secondaryTaskName)) {
+            remainingSecondaryTasks.push(secondaryTask);
+        }
+    }
+
+    return primaryTasks.concat(remainingSecondaryTasks);
+}
+
+function containsTaskName(primaryTasks, secondaryTaskName) {
+    let doContain = false;
+    for (const primaryTask of primaryTasks) {
+        if (primaryTask.getName().includes(secondaryTaskName)) {
+            doContain = true;
+            break;
+        }
+    }
+    return doContain;
+}
+
+function groupByCompletion(tasks) {
+    const completedAndIncomplete = new Map();
+    completedAndIncomplete.set('completed', []);
+    completedAndIncomplete.set('incomplete', []);
+
+    Array.from(tasks).forEach(task => {
+        if (isTaskCompleted(task)) {
+            completedAndIncomplete.get('completed').push(task);
+        } else {
+            completedAndIncomplete.get('incomplete').push(task);
+        }
+    });
+
+    return completedAndIncomplete;
+}
+
+function isTaskCompleted(task) {
+    return task.isCompleted() || findMatchingTag(task, CONFIG.TAGS.COMPLETED_STATUS)[0];
+}
+
+/**
+ * 提取基础统计信息的辅助函数
+ */
+function extractBasicInfo(tasks, objectiveTaskGraph) {
+    const countOfTasks = tasks.length;
+    // 使用可选链和空值合并运算符处理可能缺失的时间预估
+    const totalEstimate = tasks.reduce((sum, task) => sum + (task.getEstimate()?.getMinutes() ?? 0), 0);
+
+    const unestimatedTasks = getUnestimatedTasks(tasks, objectiveTaskGraph);
+    const countOfUnestimatedTasks = unestimatedTasks.length;
+
+    // 返回标准化的键名
+    return { countOfTasks, totalEstimate, unestimatedTasks, countOfUnestimatedTasks };
+}
+
+/**
+ * 获取没有估计时间（estimate 为 null 或 minutes === 0），并且没有子任务的任务列表
+ */
+function getUnestimatedTasks(tasks, objectiveTaskGraph) {
+    return tasks.filter(task => {
+        const estimate = task.getEstimate();
+
+        // 如果有子任务，直接排除
+        if (hasSubtasks(task, objectiveTaskGraph)) {
+            return false;
+        }
+
+        // 判断估计时间是否未设置或为 0 分钟
+        return !estimate || estimate.getMinutes() === 0;
+    });
+}
+
+/**
+ * 检查一个 task 是否拥有子任务（即它出现在 taskMap 的 keys 中，并且对应 Set 非空）
+ */
+function hasSubtasks(taskToCheck, taskMap) {
+    return (
+        taskMap instanceof Map &&
+        taskMap.has(taskToCheck) &&
+        taskMap.get(taskToCheck) instanceof Set &&
+        taskMap.get(taskToCheck).size > 0
+    );
+}
+
+function getTasksWithoutDueDate(tasks) {
+    const tasksWithoutDueDate = tasks.filter(task => {
+        const dueDate = task.getDueDate()
+        return !dueDate;
+    });
+    return tasksWithoutDueDate;
+}
+
+function collectRecurringTaskInstances(reurringTask, dueDateLimit, taskInstances) {
+    const formatDate = (date) => `"${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes()}:${date.getSeconds()}"`;
+
+    const dueDate = reurringTask.getDueDate();
+    if (dueDate < dueDateLimit) {
+        taskInstances.push(reurringTask);
+        reurringTask.complete()
+        const newGeneratedReurringTask = rtm.getTasks(`status:incomplete and name:${reurringTask.getName()} and addedAfter:${formatDate(now)}`)
+        // console.log(`the newGeneratedReurringTask length is ${newGeneratedReurringTask.length}`)
+        // suppose only generate one, and added date's accuracy seems only on minutes, if run this script within 1 mins after generated recurring task, then these recurring tasks would be returned.
+        if (newGeneratedReurringTask.length == 1) {
+            collectRecurringTaskInstances(newGeneratedReurringTask[0], dueDateLimit, taskInstances)
+        }
+    }
+}
+
+/**
+ * 优化后的目标饱和度展示函数
+ */
+function generateObjectivesReport(objectivesContext, adaptiveStats, cutoffDateTime, periodName) {
+    console.log(`[generateObjectivesReport] Cutoff Assessment Date Time: ${cutoffDateTime}, Period Name: ${periodName}`);
+
+    // 1. 基础数据准备
+    /**
+     * 平均每天花在目标任务上的实际工作时间，以分钟为单位
+     */
+
+    const averageWorkhoursOnObjective = adaptiveStats.minutes;
+    const historyNote = adaptiveStats.note;
+    console.log(`[Stats] 最终采用日均工时: ${averageWorkhoursOnObjective.toFixed(1)}m ${historyNote}`);
+
+    // 3. 核心逻辑处理：一次遍历收集数据
+    /**
+     * 所有未完成任务的预估时间，单位是分钟
+     */
+    let allObjectivesIncompleteEstimate = 0;
+    // ✅ 新增：统计已完成的原始预估，用于计算完成率
+    let allObjectivesCompletedEstimate = 0;
+    const objectiveName2IncompleteEstimate = new Map(); // 用于存储中间结果，避免二次操作 Map
+    const objectiveName2WorkRatio = new Map();
+
+    // 4. 生成任务明细消息 (利用之前收集的数据)
+    const detailMessages = objectivesContext.map(objContext => {
+
+        allObjectivesIncompleteEstimate += objContext.incompleteTasksEstimate;
+        // ✅ 累加已完成预估
+        allObjectivesCompletedEstimate += objContext.completedTasksEstimate;
+
+        objectiveName2IncompleteEstimate.set(objContext.objectiveName, objContext.incompleteTasksEstimate);
+
+        // 辅助函数：过滤掉空项，并用分隔符连接
+        const joinRow = (...parts) => parts.filter(Boolean).join(' ⁞ ');
+
+        // 预计算警告
+        // 1.如果任务总数为0，意味着没有安排任务，给出警告
+        const zeroTaskWarn = (objContext.totalTasksCount === 0 && !objContext.isParentObjective) ? `⚠️-没有为目标安排任务:${objContext.objectivePermalink}` : CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+
+        const excludeIncompleteObjectiveTasks = objContext.unestimatedIncompleteTasks.filter(task => !findMatchingTag(task, CONFIG.TAGS.OBJECTIVE_TYPES, CONFIG.TAGS.DEFAULT_TASK_TYPE)[0])
+        const numOfUnestimatedIncompleteTasks = excludeIncompleteObjectiveTasks.length
+        const unestimatedIncompleteTaskWarn = numOfUnestimatedIncompleteTasks !== 0 ? `⚠️-${numOfUnestimatedIncompleteTasks}待办任务未设置预估:\n${excludeIncompleteObjectiveTasks.map(task => { return task.getPermalink() + '\n' })}` : CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+
+        const excludeCompletedObjectiveTasks = objContext.unestimatedCompletedTasks.filter(task => !findMatchingTag(task, CONFIG.TAGS.OBJECTIVE_TYPES, CONFIG.TAGS.DEFAULT_TASK_TYPE)[0])
+        const numOfUnestimatedCompletedTasks = excludeCompletedObjectiveTasks.length
+        const unestimatedCompletedTaskWarn = numOfUnestimatedCompletedTasks !== 0 ? `⚠️-${numOfUnestimatedCompletedTasks}已完成任务无花费时间:\n${excludeCompletedObjectiveTasks.map(task => { return task.getPermalink() + '\n' })}` : CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+
+        const quantitativeProgressStatus = analyzeObjectiveQuantitativeProgressStatus(objContext);
+        const quantitativeProgressStatusWarn = quantitativeProgressStatus.isLagging === true ? `⚠️-数量进度滞后，🔢: ${quantitativeProgressStatus.summary.actualCompleted} 🆚 ${quantitativeProgressStatus.summary.expectedCompleted} ⚖️: ${quantitativeProgressStatus.summary.actualPercentage} 🆚 ${quantitativeProgressStatus.summary.expectedPercentage}\n` : CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+
+        const estimatedProgressStatus = analyzeObjectiveEstimatedProgressStatus(objContext, CONFIG.WORKDAY_CONFIG);
+
+        const calculable = estimatedProgressStatus.calculable
+        const workRatio = estimatedProgressStatus.result.workRatio;
+
+        // 获取 Source 对象
+        const ratioSource = calculable ? estimatedProgressStatus.result.ratioSource : null;
+        const ratioSourceIcon = (calculable && ratioSource) ? `基于${ratioSource.icon}` : "❓";
+        const isCircuitBreaker = calculable ? ratioSource.id === RATIO_SOURCE.CIRCUIT_BREAKER_HISTORY.id || ratioSource.id === RATIO_SOURCE.CIRCUIT_BREAKER_FALLBACK.id : false
+        const localWorkRatio = calculable ? estimatedProgressStatus.result.localWorkRatio.toFixed(2) : 0;
+
+        //将目标的workRatio保存起来
+        objectiveName2WorkRatio.set(objContext.objectiveName, {
+            ratio: workRatio,
+            source: ratioSource
+        });
+
+        const projectedCompletionDate = calculable ? new Date(estimatedProgressStatus.result.projectedCompletionDate) : "N/A";
+        const projectedMessage = estimatedProgressStatus.result.message;
+
+        const estimatedProgressStatusWarn = calculable ? (projectedCompletionDate > objContext.objectiveDueDate ? `⚠️-${ratioSourceIcon}-${isCircuitBreaker ? `${workRatio.toFixed(2)}(💥${localWorkRatio})` : workRatio.toFixed(2)}-预估进度滞后，${formatDateTimeWithWeekday(projectedCompletionDate)} 🆚 ${formatDateTimeWithWeekday(objContext.objectiveDueDate)}\n` : `${ratioSourceIcon}-${isCircuitBreaker ? `${workRatio.toFixed(2)}(💥${localWorkRatio})` : workRatio.toFixed(2)}-预计完成日期: ${formatDateTimeWithWeekday(projectedCompletionDate)}\n`) : `🚨-预估进度无法/需预测。\n` + `${projectedMessage}`;
+
+        // 构建每一行
+        const header = `🎯: ${objContext.objectiveName} ${objContext.isParentObjective ? (objContext.incompleteTasksEstimate > 0 ? '🈶☑️🪜🎯' : '🈚️☑️🪜🎯') : CONFIG.SPECIAL_CHARS.EMPTY_STRING} 🔗: ${objContext.objectivePermalink}`;
+
+        // 使用 joinRow 自动添加分隔符，代码看起来非常整洁
+        const countRow = joinRow(
+            `💯🔢: ${objContext.totalTasksCount}`,
+            `✅🔢: ${objContext.completedTasksCount}`,
+            `☑️🔢: ${objContext.incompleteTasksCount}`,
+            `#️⃣✅📈: ${objContext.quantitativeCompletionPercentage}%`
+        );
+
+        const timeRow = joinRow(
+            `💯⏳: ${objContext.totalTasksEstimate}`,
+            `✅⏳: ${objContext.completedTasksEstimate}`,
+            `☑️⏳: ${objContext.incompleteTasksEstimate}`,
+            `✅⏳📈: ${objContext.estimateCompletionPercentage}%`
+        );
+
+        const warningRow = joinRow(
+            `${zeroTaskWarn} ${unestimatedIncompleteTaskWarn} ${unestimatedCompletedTaskWarn} ${quantitativeProgressStatusWarn} ${estimatedProgressStatusWarn}`,
+        );
+
+        const footer = joinRow(
+            ``,
+        );
+
+        // 最终组装
+        const message = [header, countRow, timeRow, warningRow, footer].join('\n');
+
+        return message;
+    })
+
+    let newDetailMessages = appendProportionToMessages(detailMessages, objectiveName2IncompleteEstimate, allObjectivesIncompleteEstimate);
+
+    // 5. 饱和度计算与总结
+    let histCapSaturation = buildHistoricalCapacitySaturation(cutoffDateTime, averageWorkhoursOnObjective, allObjectivesIncompleteEstimate);
+
+    //基于objectiveName2IncompleteEstimate和objectiveName2WorkRatio来计算总的未完成任务的所需工作时间
+    const globalWarningResult = generateGlobalWarning(objectivesContext, objectiveName2WorkRatio, cutoffDateTime, periodName);
+
+    // 解构 globalWarningResult 以便使用
+    const { saturation_advice, capacityAnalysis, loadHeatMap, scheduleDeduce, metrics } = globalWarningResult;
+
+    // ============================================================
+    // 🎨 渐进式披露组装 (Report Assembly)
+    // 策略：HUD(状态) -> Note1(行动) -> Note2(诊断) -> Note3(明细)
+    // ============================================================
+
+    const DIVIDER = `${CONFIG.DELIMITERS.BLOCK_DELIMITER.repeat(60)}`; // 优雅的长划线
+
+    // --- L0: 抬头显示 (HUD - Task Title) ---
+    // 逻辑：基于物理饱和度定色，基于 Advice 标题定性
+    const satVal = parseFloat(metrics.capacitySaturation);
+    let statusIcon = "🟢";
+    let statusText = "正常";
+
+    if (satVal > 100) {
+        statusIcon = "🛑";
+        statusText = saturation_advice.header.includes("排期溢出") ? "逾期" : "外溢";
+    } else if (satVal > 90) {
+        statusIcon = "⚠️";
+        statusText = "高压";
+    } else if (satVal === 0 && metrics.weightedRemainingMinutes === 0) {
+        statusIcon = "⚪";
+        statusText = "无任务";
+    }
+
+    // 标题格式: 🛑 本周 | 159.5% | 逾期
+    const hudTitle = `${statusIcon} ${periodName} | ${satVal}% | ${statusText}`;
+
+    // --- L1: 行动层 (Action Note) ---
+    // 核心价值：决策。只看这一个 Note 就能决定是否加班或砍需求。
+    const actionNote = [
+        `🚀 **行动指南 (Action Plan)**`,
+        DIVIDER,
+        saturation_advice.header,        // 🛑 严重警告...
+        "",
+        saturation_advice.actionAdvice,  // 🤔👉 建议行动... (含加班 & Smart Cut)
+        "",
+        DIVIDER,
+        `📊 **核心指标速览**:`,
+        `• 物理饱和度: ${metrics.capacitySaturation}%`,
+        `• 真实需时: ${(metrics.weightedRemainingMinutes / 60).toFixed(1)}h (可用 ${(metrics.availableMinutes / 60).toFixed(1)}h)`
+    ].join('\n');
+
+
+    // --- L2: 诊断层 (Diagnosis Note) ---
+    // 核心价值：分析。包含 排期推演(时间维)、热力图(负载维)、容量计算(数学维)、习惯对比(软性维)。
+    const diagnosisNote = [
+        `🧠 **深度诊断 (Deep Diagnosis)**`,
+        DIVIDER,
+        scheduleDeduce,    // 📅 排期推演
+        "",
+        loadHeatMap,       // 🌡️ 负载热力
+        "",
+        DIVIDER,
+        capacityAnalysis,  // 📊 容量计算详情
+        "",
+        DIVIDER,
+        `📉 **历史习惯分析**:`,
+        histCapSaturation.report  // (引用前文计算的吞吐量文本)
+    ].join('\n');
+
+
+    // --- L3: 数据层 (Data Note) ---
+    // 核心价值：查证。原始的目标列表详情。
+    const detailNote = [
+        `🗄️ **目标明细档案 (Details Archive)**`,
+        `共 ${newDetailMessages.length} 个目标`,
+        DIVIDER,
+        newDetailMessages.join(`\n${DIVIDER}\n\n`)
+    ].join('\n');
+
+
+    // ============================================================
+    // 💾 持久化与反馈 (Persistence & Feedback)
+    // ============================================================
+
+    // 1. 保存到 RTM (多笔记模式)
+    // 顺序：行动 -> 诊断 -> 明细
+    saveMessage(periodName, hudTitle, [detailNote, diagnosisNote, actionNote]);
+
+    // 2. 记录日志 (系统后台)
+    // 重新计算一些日志专用指标
+    const totalScope = allObjectivesCompletedEstimate + allObjectivesIncompleteEstimate;
+    const completionRate = totalScope > 0
+        ? ((allObjectivesCompletedEstimate / totalScope) * 100).toFixed(1)
+        : "0.0";
+
+    const globalWorkRatio = objectivesContext.length > 0 ? getSafeGlobalRatio(objectivesContext[0]) : { value: 1.0, isFallback: true }
+    const logRatioVal = typeof globalWorkRatio === 'object' ? globalWorkRatio.value : globalWorkRatio;
+
+    const summaryDataForLog = {
+        globalRatio: parseFloat(logRatioVal).toFixed(2),
+        throughputSaturation: histCapSaturation.data.throughputSaturation.toFixed(1),
+        capacitySaturation: metrics.capacitySaturation,
+        rawScopeHours: (totalScope / 60).toFixed(1),
+        completionRate: completionRate,
+        remainingDays: histCapSaturation.data.remainingWorkingDays // 剩余天数
+    };
+
+    logSystemMetrics(summaryDataForLog, periodName);
+
+    // 3. 用户反馈 (仅展示行动层，避免弹窗爆炸)
+    return rtm.newMessage(hudTitle, `✅ 报告已生成。\n\n${actionNote}\n\n(更多诊断分析与明细请查看生成的任务笔记)`);
+}
+
+function buildHistoricalCapacitySaturation(cutoffDateTime, averageWorkhoursOnObjective, allObjectivesIncompleteEstimate) {
+
+    // 5. 吞吐量饱和度计算与总结 (Throughput Analysis)
+
+    // --- A. 核心计算 (Calculations) ---
+    // 1. 计算剩余的时间窗口 (天数)
+    const remainingWorkingDays = getRemainingWorkingDays(now, cutoffDateTime, CONFIG.WORKDAY_CONFIG);
+
+    // 2. 计算基于历史习惯的供给能力 (Historical Capacity in Minutes)
+    // 语义：按过去每天能消化多少预估(averageWorkhoursOnObjective)，剩下几天总共能消化多少？
+    const historicalCapacityMinutes = averageWorkhoursOnObjective * remainingWorkingDays;
+
+    // 3. 计算需求与供给的差值 (Gap)
+    const diffMinutes = Math.abs(allObjectivesIncompleteEstimate - historicalCapacityMinutes);
+
+    // 4. 计算吞吐饱和度 (Throughput Saturation)
+    // 语义：当前囤积的预估量是历史消化能力的百分之多少？
+    const throughputSaturation = historicalCapacityMinutes > 0
+        ? (allObjectivesIncompleteEstimate / historicalCapacityMinutes * 100)
+        : 0;
+
+    // --- B. 状态判定 (State Determination) ---
+    // 判断是“超载”还是“盈余”
+    const isOverloaded = allObjectivesIncompleteEstimate >= historicalCapacityMinutes;
+
+    // 提取动态文案变量，避免在字符串模板里写逻辑
+    const statusIcon = isOverloaded ? "🔴" : "🟢"; // 视觉增强
+    const relationSymbol = isOverloaded ? "≥" : "<";
+    const actionVerb = isOverloaded ? "需适当减少" : "可适当增加";
+
+    // --- C. 视图渲染 (Rendering) ---
+    // 使用格式化工具简化小数位处理
+    const fmt = (num) => num.toFixed(2);
+    const fmtSat = (num) => num.toFixed(1);
+
+    const summaryHeader = `🕰️📈🌡️: **截止于 ${formatDateTime(cutoffDateTime)}**`;
+    const summaryStats = `总未完成预估：${allObjectivesIncompleteEstimate}m | 基于历史生产力的饱和度：${fmtSat(throughputSaturation)}%`;
+
+    // 解释说明：现状 vs 期望
+    const explanation = `实际未完成: ${allObjectivesIncompleteEstimate}m ${relationSymbol} 预计可完成: ${fmt(historicalCapacityMinutes)}m(算式: 剩余${fmt(remainingWorkingDays)}天 × 日均${fmt(averageWorkhoursOnObjective)}m)`;
+
+    // 行动建议
+    const advice = `👉 **建议**: ${statusIcon} ${actionVerb} ${fmt(diffMinutes)} 分钟预估量。`;
+
+    // 组装最终消息
+    let saturationReport = [
+        summaryHeader,
+        summaryStats,
+        explanation,
+        advice,
+    ].join("\n");
+
+    return {
+        report: saturationReport,
+        data: {
+            throughputSaturation,
+            remainingWorkingDays
+        }
+    };
+}
+/**
+ * 黑匣子记录器：将核心指标追加到日志任务中
+ * @param {Object} summaryData - 包含 ratio, saturation, scope, completion 等数据
+ * @param {string} periodName - 周期名称
+ */
+function logSystemMetrics(summaryData, periodName) {
+    // 1. 过滤：只记录具有统计意义的周期 (本周、本月)
+    // 如果您想记录所有周期，可以注释掉这行
+    if (!['本周', '本月'].includes(periodName)) {
+        return;
+    }
+
+    const logTaskName = "📊-System-Log";
+    // 尝试在 ♻️ 列表中寻找，如果找不到就在 Inbox 或默认列表创建
+    // 注意：这里复用了 getListObject，确保该函数存在
+    const recycleList = getListObject("♻️");
+
+    let logTask = null;
+    if (recycleList) {
+        logTask = recycleList.getTasks().find(t => t.getName() === logTaskName);
+    } else {
+        // 如果找不到回收站列表，尝试在全局找 (稍微慢点)
+        const allTasks = rtm.getTasks(`name:"${logTaskName}"`);
+        if (allTasks.length > 0) logTask = allTasks[0];
+    }
+
+    // 如果还没找到，创建一个新的
+    if (!logTask) {
+        console.log(`[Logger] 初始化日志任务: ${logTaskName}`);
+        logTask = rtm.addTask(logTaskName).addTags(CONFIG.TAGS.SCRIPT_REPORT);
+        if (recycleList) logTask.setList(recycleList);
+    }
+
+    const todayStr = formatDate(now);
+
+    const logHeader = "Date | Period | Ratio(🌐) | Hist Satur(%) | Phys Satur(%) | Scope(h) | Comp(%) | RemDays\n";
+    // 2. 构建 CSV 数据
+    // 格式: 2026-02-02 | 本周 | 1.55 | 110 | 20.5 | 45.2 | 2.5
+    const logLine = `${todayStr} | ${periodName} | ${summaryData.globalRatio} | ${summaryData.throughputsaturation}% | ${summaryData.capacitySaturation}% | ${summaryData.rawScopeHours} | ${summaryData.completionRate}% | ${summaryData.remainingDays}`;
+
+    // 3. 追加笔记
+    logTask.addNote(logHeader + logLine);
+    console.log(`[Logger] 已归档数据: ${logLine}`);
+}
+
+/**
+ * 计算两个时间点之间包含的“标准工作日”数量（返回小数）
+ * 依赖函数: calculateWorkingMinutesBetween
+ * 
+ * @param {Date} startDate - 开始时间
+ * @param {Date} endDate - 截止时间
+ * @param {Object} config - 工作配置 { startHour, endHour, ... }
+ * @returns {number} 保留两位小数的天数 (e.g., 1.50)
+ */
+function getRemainingWorkingDays(startDate, endDate, config) {
+    // 1. 安全检查：确保配置合理，防止除以零
+    if (!config || config.endHour <= config.startHour) {
+        console.error("配置错误：工作结束时间必须晚于开始时间");
+        return 0;
+    }
+
+    // 2. 计算总共剩余的有效工作分钟数 
+    // (逻辑：自动扣除下班时间、周末、节假日)
+    const totalWorkingMinutes = calculateWorkingMinutesBetween(startDate, endDate, config);
+
+    // 3. 计算一个标准工作日包含多少分钟
+    // 例如：9:00 - 18:00 = 9小时 = 540分钟
+    const standardDailyMinutes = (config.endHour - config.startHour) * 60;
+
+    // 4. 转换为天数
+    if (totalWorkingMinutes <= 0) return 0;
+
+    const days = totalWorkingMinutes / standardDailyMinutes;
+
+    return parseFloat(days.toFixed(4));
+}
+
+/**
+ * 生成全局饱和度与溢出警告 (修正版 - 刚性排期模式)
+ * 精度优化：中间计算保持 Number 类型，仅在显示时格式化
+ */
+function generateGlobalWarning(objectivesContext, objectiveName2WorkRatio, cutoffDateTime, periodName) {
+    // --- 步骤 1: 数据准备 ---
+    let grandTotalWorkTime = 0;
+    let grandTotalRawEstimate = 0;
+    let totalTaskCount = 0;
+    let allIncompleteTasksPool = [];
+    let capacityBreakdownList = [];
+
+    // ... (这部分数据收集逻辑保持不变) ...
+    objectivesContext.forEach(objContext => {
+        // 对于没有子任务的目标，它们的ratio为undefined，所以取一个兜底的值1.0
+        const ratioData = objectiveName2WorkRatio.get(objContext.objectiveName);
+
+        // 防御性编程：万一 Map 里没取到
+        const ratio = ratioData?.ratio || 1.0;
+        const ratioSource = ratioData?.source || RATIO_SOURCE.GLOBAL_FALLBACK;
+
+        const rawEst = objContext.incompleteTasksEstimate || 0;
+        const currentObjectiveLoad = rawEst * ratio;
+
+        grandTotalWorkTime += currentObjectiveLoad;
+        grandTotalRawEstimate += rawEst;
+
+        // ... (Task 收集逻辑不变) ...
+        const tasks = objContext.incompleteTasks || [];
+        totalTaskCount += tasks.length;
+
+        if (rawEst > 0) {
+            capacityBreakdownList.push({
+                name: objContext.objectiveName,
+                raw: rawEst,
+                ratio: ratio,
+                ratioIcon: ratioSource.icon,
+                load: currentObjectiveLoad
+            });
+        }
+
+        tasks.forEach(task => {
+            const dueDateTimestamp = (task.getDueDate && task.getDueDate()) ? new Date(task.getDueDate()).getTime() : 0;
+            const estimate = (task.getEstimate && task.getEstimate()) ? task.getEstimate().getMinutes() : 0;
+            const taskName = (task.getName && task.getName()) ? task.getName() : "未命名任务";
+            const priority = task.getPriority();
+            const taskPermalink = task.getPermalink();
+
+            allIncompleteTasksPool.push({
+                taskName: taskName,
+                taskPermalink,
+                objectiveName: objContext.objectiveName,
+                ratio: ratio,
+                ratioSource: ratioSource,
+                dueDateTimestamp: dueDateTimestamp,
+                estimate: estimate,
+                priority: priority,
+                objectivePriority: objContext.objectivePriority,
+                // 安全获取 global ratio，如果没有则回退到 1.0
+                globalWorkRatio: getSafeGlobalRatio(objContext)
+            });
+        });
+    });
+
+    // ... (Capacity 排序与 specificCalcStr 生成逻辑不变) ...
+    capacityBreakdownList.sort((a, b) => b.load - a.load);
+    const specificCalcStr = capacityBreakdownList.map(item =>
+        `       • ${item.name}: ${(item.raw / 60).toFixed(2)}h × ${item.ratio.toFixed(2)}${item.ratioIcon} = ${(item.load / 60).toFixed(2)}h`
+    ).join('\n');
+
+
+    allIncompleteTasksPool.sort((a, b) => {
+        if (a.dueDateTimestamp > 0 && b.dueDateTimestamp > 0) return a.dueDateTimestamp - b.dueDateTimestamp;
+        if (a.dueDateTimestamp > 0) return -1;
+        if (b.dueDateTimestamp > 0) return 1;
+        return 0;
+    });
+
+    let currentSimulationTime = new Date(now);
+    let criticalPathInfo = null;
+
+    // 1. 收集排期结果 (在你的 calculateTaskSchedule 循环中收集)
+    // 需要你在之前的循环里创建一个数组来存这些信息
+    const scheduleSnapshots = [];
+
+    allIncompleteTasksPool.forEach(item => {
+        const schedule = calculateTaskSchedule(item, currentSimulationTime, addWorkingMinutes, CONFIG);
+        currentSimulationTime = schedule.endTime;
+
+        // ✅ 收集快照
+        scheduleSnapshots.push({
+            startTime: schedule.startTime,
+            realDuration: schedule.duration
+        });
+
+        criticalPathInfo = {
+            taskName: item.taskName,
+            objName: item.objectiveName,
+            constraintTime: item.dueDateTimestamp > 0 ? formatDateTimeWithWeekday(schedule.constraintTime) : "ASAP",
+            actualStart: formatDateTimeWithWeekday(schedule.startTime),
+            status: schedule.status,
+            rawEst: item.estimate,
+            ratio: item.ratio,
+            realDuration: schedule.duration,
+            finalEnd: formatDateTimeWithWeekday(schedule.endTime)
+        };
+    });
+
+    // scheduleSnapshots.forEach(({ startTime, realDuration }) => {
+    //     // 直接使用变量名，不需要写 item.startTime
+    //     console.log(`Time: ${startTime} | Duration: ${realDuration}`);
+    // });
+
+    // 2. 调用 API 获取容量数据
+    const dailyCapacity = analyzeDailyCapacity(scheduleSnapshots, cutoffDateTime, CONFIG.WORKDAY_CONFIG);
+
+    // dailyCapacity.dailyMap.forEach((value, key) => {
+    //     console.log(`日期: ${key}`);
+    //     console.log(`  - 容量: ${value.capacity}`);
+    //     console.log(`  - 负载: ${value.load}`);
+    //     console.log(`  - 剩余: ${value.free}`);
+    //     console.log('----------------');
+    // });
+
+    const heatmapChartStr = renderHeatmapFromMap(dailyCapacity.dailyMap);
+
+    const grandProjectedDate = currentSimulationTime;
+
+    let scheduleLogicStr = "";
+    if (criticalPathInfo) {
+        scheduleLogicStr = [
+            `     ↳ 关键路径: 由 [${criticalPathInfo.objName}] 的任务决定:`,
+            `       "${criticalPathInfo.taskName}"`,
+            `       • 设定开始: ${criticalPathInfo.constraintTime}`,
+            `       • 实际开始: ${criticalPathInfo.actualStart} ${criticalPathInfo.status}`,
+            `       • 真实工时: ${criticalPathInfo.realDuration.toFixed(0)}m (原始${criticalPathInfo.rawEst}m × ${criticalPathInfo.ratio.toFixed(2)} = ${(criticalPathInfo.realDuration / 60).toFixed(2)}h)`
+        ].join('\n');
+    } else {
+        scheduleLogicStr = `     ↳ 原理: 无待办任务`;
+    }
+
+    // --- 步骤 4: 计算与文案生成 (精度严控区) ---
+
+    // 1. 基础数值计算 (全部保持 Number 类型)
+    const totalAvailableMinutes = calculateWorkingMinutesBetween(now, cutoffDateTime, CONFIG.WORKDAY_CONFIG);
+    const totalSaturation = totalAvailableMinutes > 0 ? (grandTotalWorkTime / totalAvailableMinutes * 100) : 0;
+
+    // 2. 显示用字符串 (在这里才转字符串)
+    const projectedStr = formatDateTimeWithWeekday(grandProjectedDate);
+    const deadlineStr = formatDateTimeWithWeekday(cutoffDateTime);
+    const saturationStr = totalSaturation.toFixed(1) + "%"; // 百分比保留1位
+
+    // 容量分析部分：保留 1 位小数用于展示 (0.1h = 6min)
+    const hoursNeededStr = (grandTotalWorkTime / 60).toFixed(1);
+    const hoursRawStr = (grandTotalRawEstimate / 60).toFixed(1);
+    const hoursAvailableStr = (totalAvailableMinutes / 60).toFixed(1);
+
+    const inflationPercent = grandTotalRawEstimate > 0
+        ? (((grandTotalWorkTime - grandTotalRawEstimate) / grandTotalRawEstimate) * 100).toFixed(0)
+        : 0;
+    const inflationSign = inflationPercent >= 0 ? '+' : '';
+
+    const capacityAnalysis = [
+        `📊 **容量分析 (Capacity)**`,
+        `   • 真实需求: ${hoursNeededStr} 小时 (原始预估 ${hoursRawStr}h ${inflationSign}${inflationPercent}%)`,
+        `     ↳ 算式: ∑ (各目标待办预估 × 对应效率比率) / 60`,
+        `     ↳ 详情 (按工时降序):`,
+        `${specificCalcStr}`,
+        `   • 可用容量: ${hoursAvailableStr} 小时 (截止于 ${formatDate(cutoffDateTime)})`,
+        `   • 任务总量: ${totalTaskCount} 个待办事项`,
+    ].join('\n');
+
+    const loadHeatMap = [
+        `🌡️ **每日负载热力 (Load Heatmap)**`, // 新增标题
+        `${heatmapChartStr}`,                // 插入热力图
+    ].join('\n');
+
+    const scheduleDeduce = [
+        `📅 **排期推演 (Schedule)**`,
+        `   • 预计完工: ${projectedStr}`,
+        `${scheduleLogicStr}`,
+        `   • 目标死线: ${deadlineStr}`
+    ].join('\n');
+
+    // --- 建议生成逻辑 (使用全精度数值) ---
+
+    let header = "🧮🗓️🌡️: ";
+    let actionAdvice = "";
+
+    // 安全获取全局比率 (用于逆向计算建议预估值)
+    let safeGlobalRatio = 1.0;
+    if (allIncompleteTasksPool.length > 0) {
+        safeGlobalRatio = allIncompleteTasksPool[0].globalWorkRatio.value;
+    } else if (objectivesContext.length > 0) {
+        // 如果任务池为空，尝试从目标汇总中获取一个比率，作为兜底
+        safeGlobalRatio = getSafeGlobalRatio(objectivesContext[0]).value;
+    }
+    // 防止 Ratio 为 0 或异常
+    if (safeGlobalRatio <= 0.1) safeGlobalRatio = 1.0;
+
+    // 4.2 计算差值
+    // 物理溢出量 (分钟)
+    const overflowMinutes = grandTotalWorkTime - totalAvailableMinutes;
+    // 逆向推导需要削减的预估量 (分钟 -> 小时)
+    const estimateAdjustmentRaw = Math.abs(overflowMinutes) / safeGlobalRatio;
+    const estimateAdjustmentStr = (estimateAdjustmentRaw / 60).toFixed(1); // 显示用 (小时)
+
+    // 预计算智能削减文本 (传入分钟)
+    // 只有当溢出 > 0 时才生成
+    let smartCutText = "";
+    let overtimeAdvice = "";
+    // 
+    if (overflowMinutes > 0) {
+        const targetCutMinutes = Math.ceil(estimateAdjustmentRaw); // 转换为分钟
+        smartCutText = getSmartCutRecommendations(allIncompleteTasksPool, targetCutMinutes, cutoffDateTime, dailyCapacity, periodName);
+        overtimeAdvice = getOvertimeAdvice(cutoffDateTime, overflowMinutes);
+    }
+
+    if (grandProjectedDate > cutoffDateTime) {
+        const diffTime = Math.abs(grandProjectedDate - cutoffDateTime);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        // hoursDiffRaw 在这里肯定是正数
+        header += `🛑【严重警告】全局排期溢出！(晚 ${diffDays} 天)`;
+        actionAdvice = [
+            `🤔👉 **建议行动**: 逾期。${overtimeAdvice}`,
+            `或者，从容量来看，必须削减约 **${estimateAdjustmentStr}小时** 的预估工作量(Estimate)`,
+            `${smartCutText}`
+        ].join(`\n${CONFIG.DELIMITERS.BLOCK_DELIMITER.repeat(45)}\n`);
+
+    } else {
+        // 未逾期的情况，生成 "可增加工作量" 的建议
+        const additionAdvice = `可增加约 **${estimateAdjustmentStr}小时** 的预估工作量。`;
+
+        // 未逾期 但 饱和度 > 100% 代表了一种 “虽然没死线，但已爆肝” 的状态。
+        // 它通常意味着：你正在利用“非标准工作时间（如休息时间、取整误差）”来消化任务。
+        // 保留这个分支作为 “严重警告 (外溢)” 是非常必要的，它提醒用户：“你虽然能做完，但这不健康。”
+        if (totalSaturation > 100) {
+            // 当 未逾期 但 饱和度 > 100% 时，意味着：
+            // “虽然我在 Deadline 之前能做完，但这需要我付出超过标准工作时间（比如 9-18 点）的代价。”
+            header += `🛑【严重警告】总饱和度 ${saturationStr} (外溢)`;
+            actionAdvice = `🤔👉 **建议行动**: 需求溢出。${overtimeMsg}\n   或者，建议减少 **${estimateAdjustmentStr}小时** 的预估工作量。${smartCutText}`;
+        } else if (totalSaturation > 90) {
+            header += `⚠️【高压预警】总饱和度 ${saturationStr} (极高)`;
+            actionAdvice = `🤔👉 **建议行动**: 容错率极低。如果想挑战极限，${additionAdvice}`;
+        } else if (totalSaturation > 70) {
+            header += `✅【状态良好】总饱和度 ${saturationStr}`;
+            actionAdvice = `🤔👉 **建议行动**: 节奏适中。有余力的话，${additionAdvice}`;
+        } else {
+            header += `🟢【负载较低】总饱和度 ${saturationStr}`;
+            actionAdvice = `🤔👉 **建议行动**: 资源充足。赶快安排吧，${additionAdvice}`;
+        }
+    }
+
+    // ✅ 返回对象：包含文本和数值
+    return {
+        saturation_advice: { header, actionAdvice },
+        capacityAnalysis,
+        loadHeatMap,
+        scheduleDeduce,
+        metrics: {
+            weightedRemainingMinutes: grandTotalWorkTime,
+            availableMinutes: totalAvailableMinutes,
+            capacitySaturation: totalSaturation.toFixed(1) // 保留整数给日志用
+        }
+    };
+}
+
+/**
+ * 获取加班挽救建议 (Simple Robust Edition)
+ * 逻辑：基于剩余天数平均分摊，包含疲劳折损和深夜熔断。
+ * 
+ * @param {Date} cutoffDateTime - 周期截止时间
+ * @param {number} overflowMinutes - 总溢出分钟数 (已考虑 WorkRatio)
+ * @returns {string} 建议文案
+ */
+function getOvertimeAdvice(cutoffDateTime, overflowMinutes) {
+    // 基础防御
+    if (!overflowMinutes || overflowMinutes <= 0) return "";
+
+    let overtimeAdvice = "";
+
+    // 1. 计算有效天数 (传入 now 以判断是否触发深夜熔断)
+    const candidateDays = countOvertimeCandidateDays(now, cutoffDateTime, CONFIG.WORKDAY_CONFIG);
+
+    if (candidateDays > 0) {
+        // 2. 应用疲劳折损 (Math: 需求 / 0.8 = 实际需投入物理时间)
+        const physicalOverflowMinutes = overflowMinutes / OVERTIME_CONFIG.EFFICIENCY_FACTOR;
+
+        // 3. 计算每天需额外增加的物理小时
+        const dailyOvertimeHours = (physicalOverflowMinutes / candidateDays) / 60;
+
+        // 4. 推算预计下班时间 (基于标准下班时间 + 加班时长)
+        // 注意：这里是一个“心理锚点”，告诉用户大概要干到几点
+        const projectedEndHour = CONFIG.WORKDAY_CONFIG.endHour + dailyOvertimeHours;
+
+        // 5. 生理极限拦截 (>= 24:00)
+        if (projectedEndHour >= 24) {
+            overtimeAdvice = `\n🌚 **挽救失败**: 即使考虑加班，每天需工作至次日凌晨，建议削减任务。`;
+        } else {
+            // 语气分级
+            let icon = "💪";
+
+            if (projectedEndHour > 22) icon = "💀"; // 22:00+
+            else if (projectedEndHour > 20) icon = "😫"; // 20:00+
+
+            // 格式化时间 18.5 -> 18:30
+            const endH = Math.floor(projectedEndHour);
+            const endM = Math.round((projectedEndHour - endH) * 60).toString().padStart(2, '0');
+
+            // 计算隐形成本 (用于教育用户：加班是不划算的)
+            const efficiencyCost = Math.round(physicalOverflowMinutes - overflowMinutes);
+
+            overtimeAdvice = `\n${icon} **加班挽救方案**: 剩余 ${candidateDays} 天，每天加班 **${dailyOvertimeHours.toFixed(1)}h** (至 ${endH}:${endM})。` +
+                `\n      *(注: 已按 ${OVERTIME_CONFIG.EFFICIENCY_FACTOR * 100}% 疲劳效率计算，您将额外付出 ${efficiencyCost}m 的隐形成本)*`;
+        }
+    } else {
+        overtimeAdvice = `\n🌚 **无可挽救**: 没有剩余工作日可用于加班 (或今日已太晚)，必须削减任务。`;
+    }
+
+    return overtimeAdvice;
+}
+
+/**
+ * 计算用于分摊加班的有效日历天数
+ * @param {Date} startDate - 通常是 now
+ */
+function countOvertimeCandidateDays(startDate, endDate, config) {
+    let count = 0;
+
+    // 初始化游标 (去除时间，只比日期)
+    let cursor = new Date(startDate);
+    cursor.setHours(0, 0, 0, 0);
+
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // 获取当前实际小时 (基于 startDate)
+    // 假设 startDate 就是 now，这样逻辑最闭环
+    const currentHour = startDate.getHours();
+
+    // 判断日期字符串是否相等
+    const isSameDate = (d1, d2) => d1.toDateString() === d2.toDateString();
+
+    while (cursor <= end) {
+        if (isWorkingDay(cursor, config)) {
+            // 核心判定：
+            // 如果是今天，且已经过了 LATE_THRESHOLD (21点)，则今天作废
+            if (isSameDate(cursor, startDate) && currentHour >= OVERTIME_CONFIG.LATE_THRESHOLD) {
+                // Skip Today
+            } else {
+                count++;
+            }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return count;
+}
+
+/**
+ * 生成每日负载热力图 (Visual Heatmap - Verified)
+ * 
+ * 审查确认点：
+ * 1. 严格的 5 字符列宽对齐，支持 "1000%" 和 "120.5" 格式。
+ * 2. 状态优先级：非工作日加班 > 溢出 > 空闲 > 平衡。
+ * 3. 语义消歧：微小数值显示为 "0.1" 而非 "0.0"。
+ * 
+ * @param {Map} dailyMap - 由 analyzeDailyCapacity 生成的 Map
+ */
+function renderHeatmapFromMap(dailyMap) {
+    // 1. 基础防御
+    if (!dailyMap || dailyMap.size === 0) return "   (暂无数据)";
+
+    const lines = [];
+    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+
+    // 辅助：文本强制对齐 (左填充空格)
+    const pad = (str, len) => String(str).padStart(len, ' ');
+
+    // 视觉符号定义
+    const getIcon = (pct, isOvertime) => {
+        if (isOvertime) return "🧨"; // 优先级最高：非工作日加班
+        if (pct >= 150) return "🩸"; // 严重爆表
+        if (pct > 100) return "🟥"; // 溢出
+        if (pct > 80) return "🟧"; // 饱和
+        if (pct > 50) return "🟨"; // 繁忙
+        if (pct > 0) return "🟩"; // 舒适
+        return "⬜";                 // 空闲
+    };
+
+    dailyMap.forEach((data, dateStr) => {
+        // 2. 过滤：跳过既无容量又无负载的日子 (如未来的空闲周末)
+        if (data.capacity === 0 && data.load === 0) return;
+
+        // 3. 核心指标计算
+        const isNonWorkDay = data.capacity === 0;
+        let pct = 0;
+        let pctDisplay = "";
+
+        if (isNonWorkDay) {
+            pct = 9999; // 逻辑极大值，用于排序或图标判断
+            pctDisplay = " N/A"; // 语义显示：无容量分母
+        } else {
+            // 四舍五入取整
+            pct = Math.round((data.load / data.capacity) * 100);
+            // 文本钳位：超过 4 位数显示 MAX，保证对齐
+            pctDisplay = pct > 9999 ? " MAX" : `${pct}%`;
+        }
+
+        const dayName = weekdays[data.dateObj.getDay()];
+        const icon = getIcon(pct, isNonWorkDay);
+
+        // 4. 数值格式化 (工时)
+        // 规则：保留1位小数，防止 "0.0" 误导
+        const formatHour = (mins) => {
+            const h = mins / 60;
+            if (mins > 0 && h < 0.05) return "0.1"; // 有值但很小
+            return h.toFixed(1);
+        };
+
+        const loadStr = pad(formatHour(data.load), 5);     // e.g. " 12.5"
+        const capStr = pad(formatHour(data.capacity), 5); // e.g. "  8.0"
+        const pctStr = pad(pctDisplay, 5);                // e.g. " 120%"
+
+        // 5. 状态文案生成 (Status Logic)
+        let status = "";
+        const TOLERANCE = 0.1; // 浮点数容差
+
+        if (isNonWorkDay) {
+            // 场景：周末或下班后加班
+            status = `🧨加班${formatHour(data.load)}h`;
+        } else if (data.free < -TOLERANCE) {
+            // 场景：工作日溢出
+            status = `⚠️溢出${formatHour(Math.abs(data.free))}h`;
+        } else if (data.free >= 30) {
+            // 场景：有显著空闲 (>=30m)
+            status = `🟢空闲${formatHour(data.free)}h`;
+        } else {
+            // 场景：平衡或微小碎片 (<30m)
+            status = `👌平衡`;
+        }
+
+        // 6. 最终组装
+        // 格式: 02-05
+        const shortDate = dateStr.length >= 10 ? dateStr.substring(5) : dateStr;
+
+        lines.push(`   ${icon} ${shortDate}(${dayName}): ${pctStr} [${loadStr}/${capStr}h] ${status}`);
+    });
+
+    return lines.join("\n");
+}
+
+/**
+ * 智能削减建议生成器 (归一化加权模型 - Normalized Weighted Model)
+ * 采用动态权重分配，将所有指标归一化为 0-100 分。
+ * 分数(CutScore)越高，建议削减的优先级越高。
+ */
+function getSmartCutRecommendations(tasksPool, targetCutMinutes, cutoffDateTime, dailyCapacity, periodName) {
+    if (targetCutMinutes <= 1 || !tasksPool || tasksPool.length === 0) return "";
+
+    const nowTimestamp = now.getTime();
+    const cutoffTimestamp = cutoffDateTime.getTime();
+
+    // === ⚙️ 权重策略配置 ===
+    let W_URGENCY, W_OBJ, W_TASK;
+    let strategyName = "";
+
+    // 1. 【优先】基于显式意图 (Period Name) 锁定策略
+    let matchedStrategy = false;
+
+    if (periodName && typeof periodName === 'string') {
+        const p = periodName;
+
+        if (p.includes('日') || p.includes('天')) {
+            // [生存模式] Day View
+            strategyName = "生存模式 (Survival)";
+            W_URGENCY = 0.50; W_OBJ = 0.35; W_TASK = 0.15;
+            matchedStrategy = true;
+        }
+        else if (p.includes('周')) {
+            // [冲刺模式] Week View
+            strategyName = "冲刺模式 (Sprint)";
+            W_URGENCY = 0.45; W_OBJ = 0.30; W_TASK = 0.25;
+            matchedStrategy = true;
+        }
+        else if (p.includes('月')) {
+            // [项目模式] Month View
+            strategyName = "项目模式 (Project)";
+            W_URGENCY = 0.25; W_OBJ = 0.45; W_TASK = 0.30;
+            matchedStrategy = true;
+        }
+        else if (p.includes('季') || p.includes('年') || p.includes('半年')) {
+            // [愿景模式] Vision View
+            strategyName = "愿景模式 (Vision)";
+            W_URGENCY = 0.10; W_OBJ = 0.60; W_TASK = 0.30;
+            matchedStrategy = true;
+        }
+        console.log(`[getSmartCutRecommendations] 识别出给定的周期名[${p}]，所匹配的模式是${strategyName}`)
+    }
+
+    // 2. 【兜底】如果未识别周期名 (手动日期)，则退回基于剩余天数的数学逻辑
+    if (!matchedStrategy) {
+        let horizonDays = 7;
+        if (cutoffDateTime) {
+            horizonDays = Math.ceil((cutoffTimestamp - nowTimestamp) / (1000 * 60 * 60 * 24));
+        }
+        horizonDays = Math.max(1, horizonDays);
+
+        if (horizonDays <= 3) {
+            strategyName = "生存模式 (Survival/Math)";
+            W_URGENCY = 0.50; W_OBJ = 0.35; W_TASK = 0.15;
+        } else if (horizonDays <= 14) {
+            strategyName = "冲刺模式 (Sprint/Math)";
+            W_URGENCY = 0.45; W_OBJ = 0.30; W_TASK = 0.25;
+        } else if (horizonDays <= 60) {
+            strategyName = "项目模式 (Project/Math)";
+            W_URGENCY = 0.25; W_OBJ = 0.45; W_TASK = 0.30;
+        } else {
+            strategyName = "愿景模式 (Vision/Math)";
+            W_URGENCY = 0.10; W_OBJ = 0.60; W_TASK = 0.30;
+        }
+        console.log(`[getSmartCutRecommendations] 未能识别出给定的周期名[${periodName}]，根据距离截止日${formatDateTime(cutoffDateTime)}的天数${horizonDays}，所匹配的模式是${strategyName}`)
+    }
+
+    // 辅助：将 RTM 优先级映射为 0-100 的“可舍弃分”
+    // 100=最可舍弃, 0=最不可舍弃
+    const normalizeObjectivePriority = (p) => {
+        if (p == 'High') return 0;    // High
+        if (p == 'Medium') return 50; // Medium
+        if (p == 'Low') return 100;   // Low
+        return 100; // None (视为 Low)
+    };
+
+    // 辅助：任务优先级的颗粒度可以更细一点
+    const normalizeTaskPriority = (p) => {
+        if (p == 'High') return 20;   // P1 (保留一点被砍的可能性)
+        if (p == 'Medium') return 50; // P2
+        if (p == 'Low') return 80;    // P3
+        return 100; // None
+    };
+
+    // 计算周期总长度 (分母)
+    // 逻辑：如果已经超时(负数)，取 1 分钟防止除零
+    const remainingPeriodMinutes = Math.max((cutoffTimestamp - nowTimestamp) / 60000, 1);
+
+    // 1. 计算加权总分
+    const candidates = tasksPool.map(item => {
+        // --- A. 目标维度 (0-100) ---
+        const scoreObj = normalizeObjectivePriority(item.objectivePriority);
+
+        // --- B. 时间维度 (0-100) ---
+        let timeRatio = 1.0;
+        if (item.dueDateTimestamp > 0) {
+            timeRatio = calculateTimeRatio(item.dueDateTimestamp, cutoffTimestamp, nowTimestamp, remainingPeriodMinutes);
+            if (timeRatio < 0) timeRatio = 0;
+            if (timeRatio > 1.0) timeRatio = 1.0; // 封顶
+        }
+        const scoreUrgency = timeRatio * 100;
+
+        // --- C. 任务维度 (0-100) ---
+        const scoreTask = normalizeTaskPriority(item.priority);
+
+        // --- D. 最终加权求和 ---
+        // 结果范围 0 ~ 100
+        const cutScore = (scoreObj * W_OBJ) + (scoreUrgency * W_URGENCY) + (scoreTask * W_TASK);
+
+        return {
+            ...item,
+            cutScore,
+            scoreObj,
+            scoreUrgency,
+            scoreTask,
+            // 缓存用于展示的标签
+            pObjLabel: getPrioLabel(item.objectivePriority),
+            pTaskLabel: getPrioLabel(item.priority)
+        };
+    });
+
+    // 2. 排序 (分数高的先砍)
+    candidates.sort((a, b) => {
+        // 精度保留到小数点后2位即可
+        const diff = b.cutScore - a.cutScore;
+        if (Math.abs(diff) > 0.1) return diff;
+        return b.estimate - a.estimate; // 分数相同砍大的
+    });
+
+    // 3. 凑单逻辑
+    let accumulatedMinutes = 0;
+    const selectedTasks = [];
+
+    for (const task of candidates) {
+        if (accumulatedMinutes >= targetCutMinutes) break;
+        selectedTasks.push(task);
+        accumulatedMinutes += task.estimate;
+    }
+
+    if (selectedTasks.length === 0) return "";
+
+    // 4. 生成报告
+    let lines = selectedTasks.map(t => {
+        // 动态生成警告图标
+        // 如果 Obj是P1 且 Task是P1，说明砍到了骨头，用 🔥
+        const alertIcon = getSemanticAlertIcon(t);
+        // 格式化 Urgency 显示 (例如 90%)
+        const urgencyStr = (t.scoreUrgency).toFixed(0) + '%';
+
+        let actionPrefix = "";
+        let actionDesc = "";
+
+        // 🤖 核心升级：尝试寻找替补空位
+        // 只有当 API 存在，且任务不是特别巨大(大于4小时很难塞)时尝试
+        if (dailyCapacity && t.estimate <= 240) {
+            // 尝试找一个能放下该任务的天，且要在任务截止日期之前
+            const slot = dailyCapacity.findBestSlot(t.estimate, t.dueDateTimestamp);
+
+            if (slot.success) {
+                // 🎉 找到了！建议移动
+                actionPrefix = "🔄移至";
+                actionDesc = `${slot.dateStr}(周${slot.dayName})`;
+
+                // ✅ 关键：必须扣减 API 内部的容量
+                // 通过 slot.slotRef 引用直接修改 Map 中的数据
+                slot.slotRef.free -= t.estimate;
+                slot.slotRef.load += t.estimate; // 保持数据一致性
+            }
+        }
+
+        // 如果没找到空位，回退到原有的逻辑 (推迟/移除)
+        if (!actionPrefix) {
+            actionPrefix = t.timeRatio > 0.8 ? "🗓️推迟" : "✂️移除";
+        }
+
+        // 显示 Score 以便调试和理解 (可选)
+        // [P3➔P2|⏳90%]
+        return `    ${alertIcon} ${actionPrefix} ${actionDesc} [${t.pObjLabel} ⤷ ${t.pTaskLabel}] \n     ${t.objectiveName} ⤷ ${t.taskName} (${t.estimate}m) \n     ⏰${urgencyStr} | ${formatDateTimeWithWeekday(new Date(t.dueDateTimestamp))}\n`;
+    });
+
+    lines = lines.join(`${CONFIG.DELIMITERS.BLOCK_DELIMITER.repeat(45)}\n`)
+
+    const savedHours = (accumulatedMinutes / 60).toFixed(1);
+
+    const smartCutText = [
+        `💡 **智能削减建议 (可腾出 ${savedHours}h)**:`,
+        `*(${strategyName}模型: ${W_OBJ * 100}%目标 + ${W_URGENCY * 100}%时间 + ${W_TASK * 100}%任务)*`,
+        `${CONFIG.DELIMITERS.BLOCK_DELIMITER.repeat(45)}`,
+        lines].join('\n')
+
+    return smartCutText;
+}
+
+/**
+ * API: 分析每日容量并提供空闲时段查询 (Final Golden Version)
+ * 配合修正后的 addWorkingMinutes 使用，确保负载分摊和空位推荐的数学精确性。
+ * 
+ * @param {Array} taskScheduleResults - 排期推演结果 [{startTime, realDuration}]
+ * @param {Date} cutoffDate - 周期截止日期
+ * @param {Object} config - 工作日配置
+ */
+function analyzeDailyCapacity(taskScheduleResults, cutoffDate, config) {
+    const dailyCapacityMins = (config.endHour - config.startHour) * 60;
+    const loadMap = new Map();
+
+    const isSameDay = (d1, d2) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+
+    // --- 1. 初始化时间轴 (修正了“今天”的物理剩余容量) ---
+    let cursor = new Date(now);
+    cursor.setHours(0, 0, 0, 0);
+    const end = new Date(cutoffDate);
+    end.setHours(23, 59, 59, 999);
+
+    while (cursor <= end) {
+        const dateStr = formatDate(cursor);
+        const isWork = isWorkingDay(cursor, config);
+
+        let dayCapacity = 0;
+        if (isWork) {
+            if (isSameDay(cursor, now)) {
+                // [今天]: 容量 = 下班时间 - Max(上班时间, 当前物理时间)
+                const nowHour = now.getHours() + (now.getMinutes() / 60);
+                if (nowHour >= config.endHour) {
+                    dayCapacity = 0; // 已下班
+                } else {
+                    const effectiveStart = Math.max(nowHour, config.startHour);
+                    // 向下取整，保持保守
+                    dayCapacity = Math.floor((config.endHour - effectiveStart) * 60);
+                }
+                if (dayCapacity < 0) dayCapacity = 0;
+            } else {
+                // [未来]: 全天容量
+                dayCapacity = dailyCapacityMins;
+            }
+        }
+
+        loadMap.set(dateStr, {
+            dateStr: dateStr,
+            dateObj: new Date(cursor),
+            capacity: dayCapacity,
+            load: 0,
+            free: dayCapacity // 初始空闲 = 容量
+        });
+
+        cursor.setDate(cursor.getDate() + 1);
+    }
+
+    // --- 2. 负载精确分摊 (与 addWorkingMinutes 逻辑完全对齐) ---
+    taskScheduleResults.forEach(item => {
+        let remainingDuration = item.realDuration;
+        let currentTaskTime = new Date(item.startTime);
+
+        // 安全阀：防止死循环
+        let safetyLoop = 0;
+
+        while (remainingDuration > 0.1 && safetyLoop < 365) {
+            safetyLoop++;
+            const dateStr = formatDate(currentTaskTime);
+
+            // 如果超出了统计范围，停止
+            if (!loadMap.has(dateStr)) break;
+
+            const dayData = loadMap.get(dateStr);
+            const isWorkDay = isWorkingDay(currentTaskTime, config);
+
+            // 🛑 非工作日：跳过，推到下一天上班时间
+            if (!isWorkDay) {
+                currentTaskTime.setDate(currentTaskTime.getDate() + 1);
+                currentTaskTime.setHours(config.startHour, 0, 0, 0);
+                continue;
+            }
+
+            // 计算当天可用窗口
+            const dayEndTime = new Date(currentTaskTime);
+            dayEndTime.setHours(config.endHour, 0, 0, 0);
+
+            const workStartHour = new Date(currentTaskTime);
+            workStartHour.setHours(config.startHour, 0, 0, 0);
+
+            // 确保 effectiveStartTime 不早于上班时间
+            const effectiveStartTime = currentTaskTime < workStartHour ? workStartHour : currentTaskTime;
+
+            let minutesAvailableInDay = 0;
+            if (dayEndTime > effectiveStartTime) {
+                minutesAvailableInDay = (dayEndTime - effectiveStartTime) / 60000;
+            }
+
+            // 本次分配量
+            const minutesToAllocate = Math.min(remainingDuration, minutesAvailableInDay);
+
+            // 只有当这一天还有物理容量时才记录负载
+            if (minutesToAllocate > 0) {
+                dayData.load += minutesToAllocate;
+                dayData.free = dayData.capacity - dayData.load;
+            }
+
+            // 推进状态
+            remainingDuration -= minutesToAllocate;
+
+            // 移动到下一天
+            currentTaskTime.setDate(currentTaskTime.getDate() + 1);
+            currentTaskTime.setHours(config.startHour, 0, 0, 0);
+        }
+    });
+
+    // --- 3. 智能补位 API (Slot Finder) ---
+    /**
+     * 寻找最佳空闲时段
+     * @param {number} minutesRequired - 任务所需时长
+     * @param {number} taskDueTimestamp - 任务死线 (0为无)
+     */
+    const findBestSlot = (minutesRequired, taskDueTimestamp) => {
+        // 宽松容差，允许 0.1 分钟的计算误差
+        const TOLERANCE = 0.1;
+
+        for (const [dateStr, data] of loadMap) {
+
+            // 1. 容量检查 (核心逻辑)
+            if ((data.free + TOLERANCE) >= minutesRequired) {
+
+                // 2. 死线检查
+                if (taskDueTimestamp > 0) {
+                    // 空位的当天最晚时间 (23:59:59) 必须在任务死线之前
+                    const slotEndOfDay = new Date(data.dateObj);
+                    slotEndOfDay.setHours(23, 59, 59);
+
+                    if (slotEndOfDay.getTime() > taskDueTimestamp) {
+                        continue; // 这一天太晚了，不能用
+                    }
+                }
+
+                const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+                return {
+                    success: true,
+                    dateStr: data.dateStr,
+                    dayName: weekdays[data.dateObj.getDay()],
+                    slotRef: data // 返回引用以便扣减
+                };
+            }
+        }
+        return { success: false };
+    };
+
+    return {
+        dailyMap: loadMap,
+        findBestSlot: findBestSlot
+    };
+}
+
+/**
+ * 根据任务属性获取语义化的警觉图标
+ * 
+ * 我们需要处理 3种目标 x 4种任务 x 2种紧迫度 = 24种场景。
+ * 
+ * 为了不写 24 个 if，我们按警觉等级归类：
+ * 图标	含义	覆盖场景 (逻辑组合)	理由
+ * 🩸	致命	Obj:P1 + Task:P1 + 急	核心的核心，碰了就完蛋。
+ * 🔥	高危	Obj:P1 + Task:P1 (缓)<br>Obj:P1 + Task:P2 + 急<br>Obj:P2 + Task:P1 + 急	核心骨架，或者核心的次级死线，或者次级项目的核心死线。
+ * ⚠️	警惕	Obj:P1 (剩余所有)<br>Obj:P2 + Task:P1 (缓)<br>Obj:P2 + Task:P2 + 急<br>Obj:P3 + Task:P1 + 急	核心项目的皮毛，次级项目的骨架，或者边缘项目的死线。
+ * ✂️	修剪	Obj:P2 (剩余所有)	次级项目的常规任务。
+ * 🧹	扫除	Obj:P3 (剩余所有)	边缘项目。
+ * 
+ * 逻辑优先于分数，确保视觉反馈符合直觉
+ * 
+ * @param {Object} item - 包含 pObj, pTask, scoreUrgency(或 timeRatio) 的任务对象
+ */
+function getSemanticAlertIcon(item) {
+    const { objectivePriority: pObj, priority: pTask, scoreUrgency } = item;
+
+    // 定义紧急阈值 (TimeRatio < 30%)
+    const isUrgent = scoreUrgency < 30;
+
+    // 1. 【🩸 致命区】核心项目的心脏跳动
+    if (pObj == 'High' && pTask == 'High' && isUrgent) {
+        return "🩸";
+    }
+
+    // 2. 【🔥 高危区】涉及核心架构或次级核心的死线
+    if (
+        (pObj == 'High' && pTask == 'High') ||          // P1项目的骨架 (即使不急)
+        (pObj == 'High' && pTask == 'Medium' && isUrgent) || // P1项目的次级死线
+        (pObj == 'Medium' && pTask == 'High' && isUrgent)    // P2项目的核心死线 (逆袭)
+    ) {
+        return "🔥";
+    }
+
+    // 3. 【⚠️ 警惕区】核心项目的皮毛 / P2骨架 / P3死线
+    if (
+        (pObj == 'High') ||                                    // 剩余的 P1 项目任务 (非核心死线)。 -> 保护整个P1项目
+        (pObj == 'Medium' && pTask == 'High') ||               // P2项目的核心骨架 (不急) -> 修正点
+        (pObj == 'Medium' && pTask == 'Medium' && isUrgent) || // P2项目的次级死线 -> 修正点
+        (pObj == 'Low' && pTask == 'High' && isUrgent)         // P3项目的核心死线 (战略定力测试)
+    ) {
+        return "⚠️";
+    }
+
+    // 4. 【✂️ 修剪区】中等项目的常规内容
+    if (pObj == 'Medium') {
+        // 包含: P2+P2(缓), P2+P3, P2+None
+        return "✂️";
+    }
+
+    // 5. 【🧹 扫除区】边缘项目 (默认兜底)
+    // 包含: P3的所有非紧急核心任务
+    return "🧹";
+}
+
+/**
+ * 计算任务的时间位势比率
+ * @param {number} taskDueDateTimestamp - 任务截止时间戳
+ * @param {number} cutoffTimestamp - 周期截止时间戳 (优化：直接传数字)
+ * @param {number} nowTimestamp - 当前时间戳 (优化：直接传数字)
+ * @param {number} remainingPeriodMinutes - 周期总分钟数 (优化：预计算分母)
+ */
+function calculateTimeRatio(taskDueDateTimestamp, cutoffTimestamp, nowTimestamp, remainingPeriodMinutes) {
+    // 1. 判定任务的“有效计算时间”
+    let taskEffectiveTimestamp;
+
+    // 异常情况：无截止日期，视为最不急 (周期末尾)
+    if (!taskDueDateTimestamp || taskDueDateTimestamp <= 0) {
+        taskEffectiveTimestamp = cutoffTimestamp;
+    } else {
+        // 逾期检查
+        if (taskDueDateTimestamp < nowTimestamp) {
+            // 已逾期 -> 视为现在立刻 (最急)
+            taskEffectiveTimestamp = nowTimestamp;
+        } else {
+            // 尚未逾期，进行同日检查
+            // 注意：这里需要实例化 Date 对象来判断 isSameDay 和 isMidnight
+            // 这是无法避免的开销，但已经降到了最低
+            const tDate = new Date(taskDueDateTimestamp);
+            const nowDate = new Date(nowTimestamp);
+
+            if (isSameDay(tDate, nowDate)) {
+                // 如果是今天 00:00 (RTM 默认日期)，视为 Now (同日宽容)
+                // 如果是今天 18:00 (有具体时间)，保留 18:00
+                taskEffectiveTimestamp = isMidnight(tDate) ? nowTimestamp : taskDueDateTimestamp;
+            } else {
+                // 未来日期
+                taskEffectiveTimestamp = isMidnight(tDate) ? tDate.setHours(CONFIG.WORKDAY_CONFIG.startHour, 0, 0, 0) : taskDueDateTimestamp;
+            }
+        }
+    }
+
+    // 2. 修正越界：任务时间不能晚于周期截止时间
+    if (taskEffectiveTimestamp > cutoffTimestamp) {
+        taskEffectiveTimestamp = cutoffTimestamp;
+    }
+
+    // 3. 计算比率
+    const minutesToTask = (taskEffectiveTimestamp - nowTimestamp) / 60000;
+
+    // 不再需要 Math.max 防御，因为 minutesToTask >= 0 (由上面逻辑保证) 且 totalPeriodMinutes >= 1
+    return minutesToTask / remainingPeriodMinutes;
+}
+
+/**
+ * 判断给定日期是否为午夜 (00:00:00.000)
+ * 通常用于识别 RTM 中“未设置具体时间”的任务。
+ * 
+ * @param {Date} date - 需要检查的日期对象
+ * @returns {boolean}
+ */
+function isMidnight(date) {
+    // 1. 防御性编程：类型与有效性检查
+    // 确保 date 存在，是 Date 的实例，且是一个有效的日期（getTime 不返回 NaN）
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+        return false;
+    }
+
+    // 2. 严格校验：包含毫秒
+    // 只有当 时、分、秒、毫秒 全部为 0 时，才被视为系统默认的“无时间”状态
+    return date.getHours() === 0 &&
+        date.getMinutes() === 0 &&
+        date.getSeconds() === 0 &&
+        date.getMilliseconds() === 0;
+}
+
+// 辅助：获取优先级文本标签
+function getPrioLabel(p) {
+    if (p == 'High') return 'P1';
+    if (p == 'Medium') return 'P2';
+    if (p == 'Low') return 'P3';
+    return '无';
+}
+
+function isSameDay(d1, d2) {
+    return d1.getFullYear() === d2.getFullYear() &&
+        d1.getMonth() === d2.getMonth() &&
+        d1.getDate() === d2.getDate();
+}
+
+function calculateTaskSchedule(item, currentSimulationTime, addWorkingMinutes, CONFIG) {
+    // 基础耗时计算
+    const adjustedDuration = item.estimate * item.ratio;
+
+    // 1. 确定排期锚点 (Scheduled Time)
+    // 在你的模式下，DueDate 即为计划开始时间
+    // 如果没有设置时间（Timestamp <= 0），则默认紧接上一个任务 (ASAP)
+    let scheduledStartTimestamp = item.dueDateTimestamp > 0 ? item.dueDateTimestamp : currentSimulationTime.getTime();
+
+    const scheduledDateObj = new Date(scheduledStartTimestamp);
+
+    // ============================================================
+    // 🛠️ 逻辑修正：上班时间对齐
+    // ============================================================
+
+    // 【未来/跨天任务对齐】
+    // 如果计划时间在仿真时间之后（未来），且时间是 00:00 (或早于上班时间)
+    // 这种通常意味着用户只设了日期，没设具体时间，默认意图是“那天一开始就做”
+    if (scheduledStartTimestamp > currentSimulationTime.getTime() &&
+        scheduledDateObj.getHours() < CONFIG.WORKDAY_CONFIG.startHour) {
+
+        // 创建副本进行修改，避免污染原对象逻辑
+        const adjustedDate = new Date(scheduledStartTimestamp);
+        adjustedDate.setHours(CONFIG.WORKDAY_CONFIG.startHour, 0, 0, 0);
+
+        // 只有当调整后的上班时间 依然晚于 当前仿真时间时，才采纳
+        // (防止：现在是中午12点，任务设成今天，结果被强行改回早上9点)
+        if (adjustedDate.getTime() > currentSimulationTime.getTime()) {
+            scheduledStartTimestamp = adjustedDate.getTime();
+        }
+    }
+
+    // ============================================================
+    // 2. 确定实际开始时间 (Actual Start)
+    // ============================================================
+
+    // 核心排队逻辑：
+    // 不管计划定在几点，必须满足两个条件：
+    // 1. 时间到了 (scheduledStartTimestamp)
+    // 2. 手头的活干完了 (currentSimulationTime)
+    const actualStartTimestamp = Math.max(currentSimulationTime.getTime(), scheduledStartTimestamp);
+
+    const actualStartTime = new Date(actualStartTimestamp);
+
+    // ============================================================
+    // 3. 状态分析 (Status Report)
+    // ============================================================
+
+    let timeStatus = "";
+    // 计算偏差：计划时间 vs 实际上手时间
+    // 负数代表滞后，正数代表空转等待
+    const diffMs = scheduledStartTimestamp - actualStartTimestamp;
+
+    // 阈值设为 1 分钟，忽略微小误差
+    if (diffMs < -60000) {
+        // 计划 10:00，实际 11:00 -> diff = -1小时
+        // 这意味着前面的任务发生了积压
+        const delayMin = Math.abs(diffMs) / 60000;
+        const delayText = delayMin > 60 ? `${(delayMin / 60).toFixed(1)}h` : `${delayMin.toFixed(0)}m`;
+        timeStatus = `(🚫积压延后 ${delayText})`;
+
+    } else if (diffMs > 60000) {
+        // 这种情况理论上在 Math.max 逻辑下不会发生
+        // 因为 actualStart 至少会等于 scheduledStart
+        // 但如果考虑 currentSimulationTime 远早于 scheduledStart (即有空闲)，这里代表“需等待”
+
+        // 我们换个算法计算空闲时间：
+        const waitMs = scheduledStartTimestamp - currentSimulationTime.getTime();
+        if (waitMs > 60000) {
+            const waitMin = waitMs / 60000;
+            const waitText = waitMin > 60 ? `${(waitMin / 60).toFixed(1)}h` : `${waitMin.toFixed(0)}m`;
+            timeStatus = `(⏳空闲等待 ${waitText})`;
+        } else {
+            timeStatus = "(🟢按时启动)";
+        }
+    } else {
+        timeStatus = "(🟢按时启动)";
+    }
+
+    // ============================================================
+    // 4. 执行推演
+    // ============================================================
+
+    // 计算结束时间
+    const endTime = addWorkingMinutes(actualStartTime, adjustedDuration, CONFIG.WORKDAY_CONFIG);
+
+    return {
+        startTime: actualStartTime,
+        endTime: endTime,
+        status: timeStatus,
+        constraintTime: new Date(scheduledStartTimestamp), // 记录原始计划时间供参考
+        duration: adjustedDuration,
+    };
+}
+
+/**
+ * 获得每天花在目标任务上的工作时间，以分钟为单位。
+ * 
+ * 这个方法没毛病
+ */
+function getAverageDailyWorkhoursOnObjective(numOfDaysHistory) {
+    const endDateOfHistoryWindow = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59);
+    // beforeStartDateOfHistoryWindow是为了适应dueAfter，如果使用当天作为查询日期的话，那么due date为当天的任务就会被排除在外
+    const beforeStartDateOfHistoryWindow = new Date(now.getFullYear(), now.getMonth(), now.getDate() - numOfDaysHistory - 1, 23, 59, 59);
+    const 工时情况 = getEstimateOfCompTasksBetween(beforeStartDateOfHistoryWindow, endDateOfHistoryWindow)
+    const 非惯例重复工时 = 工时情况[4]
+    const 目标相关非重复工时 = 工时情况[7]
+
+    const startDateOfHistoryWindow = new Date(now.getFullYear(), now.getMonth(), now.getDate() - numOfDaysHistory);
+    const 工作日天数 = countWeekdays(startDateOfHistoryWindow, endDateOfHistoryWindow)
+    if (工作日天数 === 0) {
+        console.warn("[AverageWorkhours] 历史窗口内没有工作日，返回默认值 0");
+        return 0;
+    }
+    const 平均目标相关重复工时 = (非惯例重复工时 / 工作日天数).toFixed(2)
+    const 平均目标相关非重复工时 = (目标相关非重复工时 / 工作日天数).toFixed(2)
+
+    const 目标相关平均工时 = parseFloat(平均目标相关重复工时) + parseFloat(平均目标相关非重复工时)
+
+    return 目标相关平均工时
+}
+
+function getEstimateOfCompTasksBetween(startDate, endDate) {
+
+    let totalEstimateOfAllCompletedTasks = 0;
+    let totalEstimateOfCompletedRepeatingTasks = 0;
+    let totalEstimateOfCompletedNonRepeatingTasks = 0;
+
+    const asCompRepeatTasks = searchTasks("due", startDate, endDate, "tag:4.5-🔁 and list:🤔✅");
+    // printTasks("asCompRepeatTasks", asCompRepeatTasks)
+    const compRepeatTasks = searchTasks("completed", startDate, endDate, `isRepeating:true and dueAfter:${fullFormatDate(startDate)} and dueBefore:${fullFormatDate(endDate)}`);
+    // printTasks("compRepeatTasks", compRepeatTasks)
+    const totalCompRepeatTasks = mergeTasks(asCompRepeatTasks, compRepeatTasks);
+    // printTasks("totalCompRepeatTasks", totalCompRepeatTasks)
+
+    const compNonRoutineRepeatTasks = []
+    const compRoutineRepeatTasks = []
+    for (const compRepeatTask of totalCompRepeatTasks) {
+        if (compRepeatTask.getUrl() !== null || isTaskParentAGoal(compRepeatTask)) {
+            compNonRoutineRepeatTasks.push(compRepeatTask)
+        } else {
+            compRoutineRepeatTasks.push(compRepeatTask)
+        }
+    }
+
+    const asCompNonRepeatTasks = searchTasks("due", startDate, endDate, "not tag:4.5-🔁 and list:🤔✅");
+    // printTasks("asCompNonRepeatTasks", asCompNonRepeatTasks)
+    const compNonRepeatTasks = searchTasks("completed", startDate, endDate, `isRepeating:false and not tag:4.5-🔁 and dueAfter:${fullFormatDate(startDate)} and dueBefore:${fullFormatDate(endDate)}`);
+    // printTasks("compNonRepeatTasks", compNonRepeatTasks)
+    const totalCompNonRepeatTasks = mergeTasks(asCompNonRepeatTasks, compNonRepeatTasks);
+    // printTasks("totalCompNonRepeatTasks", totalCompNonRepeatTasks)
+
+    const compObjectiveNonRepeatTasks = []
+    const compEmergentNonRepeatTasks = []
+    for (const compNonRepeatTask of totalCompNonRepeatTasks) {
+        if (compNonRepeatTask.getUrl() !== null || isTaskParentAGoal(compNonRepeatTask)) {
+            compObjectiveNonRepeatTasks.push(compNonRepeatTask)
+        } else {
+            compEmergentNonRepeatTasks.push(compNonRepeatTask)
+        }
+    }
+
+    // CompletedRepeatingTasks
+    const totalEstimateOfCompletedRoutineRepeatingTasks = statsEstimate(compRoutineRepeatTasks)[0]
+    totalEstimateOfCompletedRepeatingTasks += totalEstimateOfCompletedRoutineRepeatingTasks
+    totalEstimateOfAllCompletedTasks += totalEstimateOfCompletedRoutineRepeatingTasks
+
+    const totalEstimateOfCompletedNonRoutineRepeatingTasks = statsEstimate(compNonRoutineRepeatTasks)[0]
+    totalEstimateOfCompletedRepeatingTasks += totalEstimateOfCompletedNonRoutineRepeatingTasks
+    totalEstimateOfAllCompletedTasks += totalEstimateOfCompletedNonRoutineRepeatingTasks
+
+    // CompletedNonRepeatingTasks
+    let numOfCompQuickwins = 0
+
+    const totalEstimate_numOfCompQuickwins_of_compObjectiveNonRepeatTasks = statsEstimate(compObjectiveNonRepeatTasks)
+    const totalEstimate_compObjectiveNonRepeatTasks = totalEstimate_numOfCompQuickwins_of_compObjectiveNonRepeatTasks[0]
+    totalEstimateOfCompletedNonRepeatingTasks += totalEstimate_compObjectiveNonRepeatTasks
+    totalEstimateOfAllCompletedTasks += totalEstimate_compObjectiveNonRepeatTasks
+    const numOfCompQuickwins_compObjectiveNonRepeatTasks = totalEstimate_numOfCompQuickwins_of_compObjectiveNonRepeatTasks[1]
+    numOfCompQuickwins += numOfCompQuickwins_compObjectiveNonRepeatTasks
+
+    const totalEstimate_numOfCompQuickwins_of_compEmergentNonRepeatTasks = statsEstimate(compEmergentNonRepeatTasks)
+    const totalEstimate_compEmergentNonRepeatTasks = totalEstimate_numOfCompQuickwins_of_compEmergentNonRepeatTasks[0]
+    totalEstimateOfCompletedNonRepeatingTasks += totalEstimate_compEmergentNonRepeatTasks
+    totalEstimateOfAllCompletedTasks += totalEstimate_compEmergentNonRepeatTasks
+    const numOfCompQuickwins_compEmergentNonRepeatTasks = totalEstimate_numOfCompQuickwins_of_compEmergentNonRepeatTasks[1]
+    numOfCompQuickwins += numOfCompQuickwins_compEmergentNonRepeatTasks
+
+    return [totalEstimateOfAllCompletedTasks, totalEstimateOfCompletedRepeatingTasks, totalEstimateOfCompletedNonRepeatingTasks, totalEstimateOfCompletedRoutineRepeatingTasks, totalEstimateOfCompletedNonRoutineRepeatingTasks, numOfCompQuickwins, totalEstimate_compEmergentNonRepeatTasks, totalEstimate_compObjectiveNonRepeatTasks]
+}
+
+function searchTasks(action, begin, end, ...extras) {
+
+    let basciQuery = [];
+    if (action !== null) {
+        basciQuery = [`${action}After:${fullFormatDate(begin)}`, `${action}Before:${fullFormatDate(end)}`];
+    }
+    // console.log("basciQuery is " + basciQuery);
+
+    const excludes = ['not (list:♻️ or list:calendar or tag:4.2-📝 or tag:1.8-👑 or tag:1.9-🧎🏻 or isGiven:true)']
+    const tmp4testing = []
+    // tmp4testing.push('list:test_list')
+    const finalQuery = [...basciQuery, ...extras, ...excludes, ...tmp4testing].join(" AND ");
+
+    // console.log(finalQuery);
+    return rtm.getTasks(finalQuery);
+}
+
+function fullFormatDate(date) {
+    return `"${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes()}:${date.getSeconds()}"`;
+}
+
+function isTaskParentAGoal(task) {
+    const parent = task.getParent()
+    const taskTypeTags = ['1.1-🔭', '1.2-🗽', '1.3-🎯', '1.4-⛳', '1.5-📌', '1.10-🎉'];
+    if (parent === null) {
+        return false
+    } else {
+        return hasAnyTag(parent, taskTypeTags)
+    }
+}
+
+function hasAnyTag(task, givenTagNames) {
+    const taskTags = task.getTags()
+    return tagsContainAny(taskTags, givenTagNames)
+}
+
+function tagsContainAny(taskTags, givenTagNames) {
+    for (let taskTag of taskTags) {
+        for (let giveTagName of givenTagNames) {
+            if (taskTag.getName() === giveTagName) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function statsEstimate(tasks) {
+    let totalEstimate = 0;
+    let numOfCompQuickwins = 0;
+
+    for (let task of tasks) {
+        const taskEstimateInMinutes = task.getEstimate() === null ? 0 : task.getEstimate().getMinutes();
+
+        let excludesWeekend = true
+        if (excludesWeekend) {
+            if (!isWeekend(task.getDueDate())) {
+                totalEstimate += taskEstimateInMinutes;
+                if (hasTag(task, "1.10-🎉")) {
+                    numOfCompQuickwins += 1
+                }
+            }
+        } else {
+            totalEstimate += taskEstimateInMinutes;
+            if (hasTag(task, "1.10-🎉")) {
+                numOfCompQuickwins += 1
+            }
+        }
+
+    }
+
+    return [totalEstimate, numOfCompQuickwins];
+}
+
+function isWeekend(date) {
+    const d = new Date(date);
+    const dayOfWeek = d.getDay(); // getDay() 返回星期几，0 表示星期天，6 表示星期六
+
+    return dayOfWeek === 0 || dayOfWeek === 6;
+}
+
+function hasTag(task, tag2find) {
+    let doesTaskHoldTag = false
+    const taskTags = task.getTags()
+    for (const tag of taskTags) {
+        if (tag.getName() === tag2find) {
+            doesTaskHoldTag = true
+            break
+        }
+    }
+
+    return doesTaskHoldTag
+}
+
+function countWeekdays(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    // 检查日期是否有效
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        console.error("无效的日期输入！");
+        return 0;
+    }
+
+    // 如果开始日期晚于结束日期，则没有工作日
+    if (start > end) {
+        return 0;
+    }
+
+    let count = 0;
+    // 创建一个可变的当前日期副本，避免修改原始 start 日期
+    const currentDate = new Date(start);
+
+    // 将时间部分清零，确保按整天计算
+    currentDate.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+
+
+    // 循环遍历从开始日期到结束日期的每一天
+    while (currentDate <= end) {
+        const dayOfWeek = currentDate.getDay(); // getDay() 返回星期几，0 表示星期天，6 表示星期六
+
+        // 如果不是星期天 (0) 且不是星期六 (6)，则为工作日 (1到5)
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+            count++;
+        }
+
+        // 将日期向前推一天
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    return count;
+}
+
+/**
+ * 分析目标是否滞后
+ * * @param {Object} goal - 目标对象
+ * @param {Array} goal.tasks - 任务列表 [{ id, date: "YYYY-MM-DD", completed: boolean }]
+ * @param {string|Date} checkDateInput - "当前"检查的时间（默认为现在）
+ * @returns {Object} 包含滞后状态和详细数据的对象
+ */
+function analyzeObjectiveQuantitativeProgressStatus(objContext, checkDateInput = now) {
+    const checkDate = getStartOfDay(new Date(checkDateInput));
+
+    const totalTasksCount = objContext.totalTasksCount;
+
+    // 1. 计算实际完成的任务数 (Actual)
+    const actualCompletedCount = objContext.completedTasksCount;
+
+    // 2. 计算截止到当前时间点，"理应"完成的任务数 (Expected)
+    // 逻辑：只要任务日期 <= 检查日期，我们就认为它应该被完成了
+
+    const allTasksOfObjective = objContext.completedTasks.concat(objContext.incompleteTasks);
+    const expectedCompletedCount = allTasksOfObjective.filter(t => {
+        const taskDate = getStartOfDay(t.getDueDate());
+        return taskDate <= checkDate;
+    }).length;
+
+    // 3. 计算百分比（用于展示，防止除以0）
+    const actualPercentage = totalTasksCount === 0 ? 0 : (actualCompletedCount / totalTasksCount);
+    const expectedPercentage = totalTasksCount === 0 ? 0 : (expectedCompletedCount / totalTasksCount);
+
+    // 4. 核心判断：是否滞后
+    // 如果实际完成的任务数 < 理应完成的任务数，即为滞后
+    const isLagging = actualCompletedCount < expectedCompletedCount;
+
+    return {
+        isLagging: isLagging,
+        summary: {
+            checkDate: checkDate.toDateString(),
+            totalTasks: totalTasksCount,
+            actualCompleted: actualCompletedCount,
+            expectedCompleted: expectedCompletedCount,
+            actualPercentage: (actualPercentage * 100).toFixed(1) + '%',
+            expectedPercentage: (expectedPercentage * 100).toFixed(1) + '%',
+        }
+    };
+}
+
+/**
+ * 将日期对象的时间部分重置为 00:00:00，用于纯日期比较
+ */
+function getStartOfDay(date) {
+    const newDate = new Date(date);
+    newDate.setHours(0, 0, 0, 0);
+    return newDate;
+}
+
+/**
+ * 辅助：格式化分钟数为 天/小时/分
+ */
+function formatDuration(totalMinutes, config) {
+    const dailyMinutes = (config.endHour - config.startHour) * 60;
+    const days = Math.floor(totalMinutes / dailyMinutes);
+    const remaining = totalMinutes % dailyMinutes;
+    const hours = Math.floor(remaining / 60);
+    const minutes = Math.round(remaining % 60);
+    return { days, hours, minutes };
+}
+
+function analyzeObjectiveEstimatedProgressStatus(objContext, config, calculationStartTime = now) {
+
+    let completionSpanText = CONFIG.SPECIAL_CHARS.EMPTY_STRING
+    let projectedDetails = CONFIG.SPECIAL_CHARS.EMPTY_STRING
+
+    // actual work minutes on every estimate minute
+    let workRatio = 0;
+    let ratioSource = null; // 用于存储 RATIO_SOURCE 枚举
+    let isUsingGlobalRatio = false;
+    let localWorkRatio = 0;
+
+    let lastCompletionDate = jan_01_1970;
+
+    const globalWorkRatio = getSafeGlobalRatio(objContext);
+
+    // A.处理已完成部分
+    const actualCompletedCount = objContext.completedTasksCount;
+
+    //A-1: 计算已完成部分的workRatio
+    if (actualCompletedCount < 2) {
+        isUsingGlobalRatio = true;
+        workRatio = globalWorkRatio.value;
+
+        // 📝 溯源：区分是“有历史”还是“纯兜底”
+        if (globalWorkRatio.isFallback) {
+            ratioSource = RATIO_SOURCE.GLOBAL_FALLBACK;
+            completionSpanText = `⚠️: 🎯自身样本不足(<2)且无🌐全局历史，使用🛡️默认兜底: ${workRatio.toFixed(2)}`;
+        } else {
+            ratioSource = RATIO_SOURCE.GLOBAL_HISTORY;
+            completionSpanText = `⚠️: 🎯自身样本不足(<2)，参考🌐全局历史: ${workRatio.toFixed(2)}`;
+        }
+
+        if (actualCompletedCount === 1 && objContext.completedTasks[0].getDueDate()) {
+            lastCompletionDate = objContext.completedTasks[0].getDueDate();
+        }
+    } else {
+        // 1. calculate totalCompletionWorkSpanInMinutes
+        const sortedCompletedTasks = objContext.completedTasks.sort((a, b) => a.getDueDate() - b.getDueDate());
+        const firstCompletedTask = sortedCompletedTasks[0];
+        const firstCompletionDate = firstCompletedTask.getDueDate();
+        lastCompletionDate = sortedCompletedTasks[sortedCompletedTasks.length - 1].getDueDate();
+
+        if (!firstCompletionDate || !lastCompletionDate) {
+            completionSpanText = "⚠️ (已完成任务缺少有效截止日期-任务的实际完成的时间)";
+            return {
+                calculable: false,
+                result: {
+                    projectedCompletionDate: "N/A (无法预测)",
+                    message: completionSpanText,
+                }
+            };
+        }
+
+        // --- 逻辑优化点 ---
+        // 使用 calculateWorkingMinutesBetween 函数，将速率计算的基准统一为“工作时间”。
+        // 1). 计算从第一个任务完成到最后一个任务完成之间，经过了多少“工作分钟”。
+        const spanInWorkingMinutes = calculateWorkingMinutesBetween(firstCompletionDate, lastCompletionDate, config);
+
+        // 2). 加上第一个任务本身花费的预估时间，以更准确地代表完成所有任务的总工作耗时。
+        const firstTaskEstimateMinutes = firstCompletedTask.getEstimate()?.getMinutes() ?? 0;
+
+        // 3).获取全局比率，如果无效则回退到 1.0 (或 1.0 到 1.5 之间的保守值)
+        const totalCompletionWorkSpanInMinutes = spanInWorkingMinutes + (firstTaskEstimateMinutes * globalWorkRatio.value);
+
+        // 2. calculate workRatio
+        const totalCompletedEstimate = objContext.completedTasksEstimate;
+        const unestimatedCompletedTasks = objContext.unestimatedCompletedTasks;
+        const unestimatedCompletedTasksCount = objContext.unestimatedCompletedTasksCount;
+
+        if (totalCompletedEstimate === 0) {
+            completionSpanText = "⚠️ (已完成任务缺少有效预估时间-未记录花费时间)";
+            return {
+                calculable: false,
+                result: {
+                    projectedCompletionDate: "N/A (无法预测)",
+                    message: completionSpanText,
+                }
+            };
+        }
+
+        let unestimatedCompletedTasksDetails = "permalink of unestimated completed tasks:\n";
+        if (unestimatedCompletedTasksCount > 0) {
+            unestimatedCompletedTasks.forEach(task => {
+                unestimatedCompletedTasksDetails += task.getPermalink() + "\n";
+            });
+        }
+
+        // 1. 先计算原始的局部比率
+        localWorkRatio = totalCompletionWorkSpanInMinutes / totalCompletedEstimate;
+
+        // 2. 定义阈值：如果局部比率超过全局比率的 N 倍 (如 4倍)，或者绝对值超过 20
+        // 说明这不是连续工作，而是间歇性任务，Span 计算法失效。
+        const RATIO_MULTIPLIER_THRESHOLD = 5.0;
+        const INITIAL_RATIO_CAP = 20.0;
+        const MAX_RATIO_CAP = 40.0;
+
+        // 动态阈值：样本越少，容忍度越低；样本越多，说明数据越可信，容忍度适当提高
+        // 只有2个任务时，容忍度低(10倍/绝对值15)；有10个任务时，容忍度高
+        let dynamicCap = (objContext.completedTasksCount > 5) ? MAX_RATIO_CAP : INITIAL_RATIO_CAP;
+
+        // 核心判断
+        if (localWorkRatio > Math.max(globalWorkRatio.value * RATIO_MULTIPLIER_THRESHOLD, dynamicCap)) {
+            isUsingGlobalRatio = true; // 标记为使用全局（或混合）
+            workRatio = globalWorkRatio.value; // 强制回退到全局水平
+
+            // 📝 溯源：熔断后回退到了哪里？
+            if (globalWorkRatio.isFallback) {
+                ratioSource = RATIO_SOURCE.CIRCUIT_BREAKER_FALLBACK;
+
+                completionSpanText = `⚠️ 数据异常: 计算出的效率比率(${localWorkRatio.toFixed(1)})过高，判定为“间歇性/并行”任务。💥触发熔断，因无🌐全局历史回退至🛡️默认: ${workRatio.toFixed(2)}`;
+            } else {
+                ratioSource = RATIO_SOURCE.CIRCUIT_BREAKER_HISTORY;
+                completionSpanText = `⚠️ 数据异常: 计算出的效率比率(${localWorkRatio.toFixed(1)})过高，判定为“间歇性/并行”任务。💥触发熔断，回退至🌐全局历史: ${workRatio.toFixed(2)}`;
+            }
+        } else {
+
+            // --- 正常采用 ---
+            isUsingGlobalRatio = false;
+            workRatio = localWorkRatio;
+
+            // 📝 溯源：这就是真实的 Local
+            ratioSource = RATIO_SOURCE.LOCAL;
+
+            // 格式化时间跨度为文本
+            const days = Math.floor(totalCompletionWorkSpanInMinutes / ((config.endHour - config.startHour) * 60));
+            const hours = Math.floor((totalCompletionWorkSpanInMinutes % ((config.endHour - config.startHour) * 60)) / 60);
+            const minutes = Math.round(totalCompletionWorkSpanInMinutes % 60);
+            const completionDetails = `firstCompletionDate: ${formatDateTime(firstCompletionDate)} lastCompletionDate: ${formatDateTime(lastCompletionDate)}\n completionWorkSpanInMinutes: ${totalCompletionWorkSpanInMinutes.toFixed(2)}分钟 (纯工作时间) totalCompletedEstimate: ${totalCompletedEstimate}分钟\n ${unestimatedCompletedTasksCount > 0 ? `⚠️: ${unestimatedCompletedTasksCount}个已完成任务缺少预估工时，预测结果可能不准:\n${unestimatedCompletedTasksDetails}` : CONFIG.SPECIAL_CHARS.EMPTY_STRING}`;
+            completionSpanText = `基于🎯自身: 耗时${days}个工作日 ${hours}小时 ${minutes}分钟\n${completionDetails}`;
+        }
+    }
+
+    // B.处理未完成部分
+    if (objContext.incompleteTasksCount === 0) {
+        projectedDetails = "⚠️ (所有任务已完成)";
+        return {
+            calculable: false,
+            result: {
+                projectedCompletionDate: "N/A (无需预测)",
+                message: projectedDetails,
+            }
+        };
+    }
+
+    const totalUncompletedEstimate = objContext.incompleteTasksEstimate;
+    const unestimatedIncompleteTasks = objContext.unestimatedIncompleteTasks;
+    const unestimatedIncompleteTasksCount = objContext.unestimatedIncompleteTasksCount;
+
+    if (totalUncompletedEstimate === 0 && !objContext.isParentObjective) {
+        projectedDetails = "⚠️ (所有剩余任务都未设置预估时间)";
+        return {
+            calculable: false,
+            result: {
+                projectedCompletionDate: "N/A (无法预测)",
+                message: projectedDetails,
+            }
+        };
+    }
+
+    let currentAvailableTime = new Date(Math.max(calculationStartTime.getTime(), lastCompletionDate.getTime()));
+    const detailedPredictions = [];
+
+    const sortedIncompleteTasks = [...objContext.incompleteTasks].sort((a, b) => {
+        if (a.getDueDate() && b.getDueDate()) {
+            return new Date(a.getDueDate()).getTime() - new Date(b.getDueDate()).getTime();
+        }
+        if (a.getDueDate()) return -1;
+        if (b.getDueDate()) return 1;
+        return 0;
+    });
+
+    sortedIncompleteTasks.forEach(task => {
+        const estimateMinutes = task.getEstimate()?.getMinutes() ?? 0;
+        const adjustedEstimatedWorkMinutes = estimateMinutes * workRatio;
+
+        let actualPlannedStartTime = new Date(currentAvailableTime);
+        if (task.getDueDate()) {
+            const taskPlannedDate = new Date(task.getDueDate());
+            if (taskPlannedDate > actualPlannedStartTime) {
+                actualPlannedStartTime = taskPlannedDate;
+            }
+        }
+
+        // 此处的 addWorkingMinutes 现在可以与速率因子完美配合
+        const predictedCompletionTime = addWorkingMinutes(actualPlannedStartTime, adjustedEstimatedWorkMinutes, config);
+
+        detailedPredictions.push({
+            name: task.getName(),
+            originalEstimatedDuration: estimateMinutes,
+            adjustedEstimatedDuration: adjustedEstimatedWorkMinutes.toFixed(2),
+            actualPlannedStartTime: actualPlannedStartTime,
+            predictedCompletionTime: predictedCompletionTime
+        });
+
+        currentAvailableTime = predictedCompletionTime;
+    });
+
+    // --- 步骤 5：最终项目预计完成时间 ---
+    const predictedProjectCompletionTime = detailedPredictions.length > 0
+        ? new Date(detailedPredictions[detailedPredictions.length - 1].predictedCompletionTime)
+        : null;
+
+    let unestimatedIncompleteTasksDetails = "permalink of unestimated incomplete tasks:\n";
+    if (unestimatedIncompleteTasksCount > 0) {
+        unestimatedIncompleteTasks.forEach(task => {
+            unestimatedIncompleteTasksDetails += task.getPermalink() + "\n";
+        });
+    }
+
+    const projectedTotalWorkMinutes = totalUncompletedEstimate * workRatio;
+    projectedDetails = `预测基于: ${ratioSource ? ratioSource.id : "❓"}\n总未完成预估工时:${totalUncompletedEstimate}分钟, 单位预估工时(1分钟)花费的工作时间:${workRatio.toFixed(2)}分钟 预测所需花费的工作时间:${projectedTotalWorkMinutes.toFixed(2)}分钟。\n ${unestimatedIncompleteTasksCount > 0 ? `⚠️: ${unestimatedIncompleteTasksCount}个未完成任务未设置预估工时，预测结果可能不准:\n${unestimatedIncompleteTasksDetails}` : CONFIG.SPECIAL_CHARS.EMPTY_STRING}`;
+
+    return {
+        calculable: true,
+        result: {
+            isUsingGlobalRatio: isUsingGlobalRatio,
+            workRatio: workRatio,
+            // ✨ 核心改进：返回完整的 Source 对象
+            ratioSource: ratioSource,
+            localWorkRatio: localWorkRatio,
+            projectedCompletionDate: formatDateTime(predictedProjectCompletionTime),
+            message: [completionSpanText, projectedDetails].join("\n"),
+        }
+    };
+}
+
+/**
+ * 计算历史工作效率比率 (Global Work Ratio)
+ * @param {number} daysBack - 回溯天数
+ * @returns {Object} { value: number, isFallback: boolean }
+ */
+function calculateHistoricalWorkRatio(daysBack) {
+    // 1. 确定时间窗口
+    const endDate = new Date(now);
+    const startDate = new Date(now);
+    startDate.setDate(startDate.getDate() - daysBack);
+    startDate.setHours(0, 0, 0, 0);
+
+    // 2. 计算数据
+    const estimatesStats = getEstimateOfCompTasksBetween(startDate, endDate);
+    // 只统计目标相关任务 (Routine with URL + Objective Non-Repeat)
+    const totalObjectiveCompletedEstimate = estimatesStats[4] + estimatesStats[7];
+
+    const totalWorkingMinutes = calculateWorkingMinutesBetween(startDate, endDate, CONFIG.WORKDAY_CONFIG);
+
+    // 3. 计算比率
+    if (totalObjectiveCompletedEstimate === 0) {
+        console.warn(`[Historical Ratio] 过去 ${daysBack} 天无完成数据，使用默认值 1.0`);
+        return { value: 1.0, isFallback: true };
+    }
+
+    const ratio = totalWorkingMinutes / totalObjectiveCompletedEstimate;
+
+    // 安全防御：防止极其离谱的数值 (比如 > 10.0)
+    // 如果 Ratio > 10，说明数据极度稀释，强制回退到 1.5 (保守估计)
+    if (ratio > 10.0) {
+        console.warn(`[Historical Ratio] 检测到比率异常 (${ratio.toFixed(1)})，判定为严重稀释，重置为 1.5`);
+        return { value: 1.5, isFallback: true };
+    }
+
+    console.log(`[Historical Ratio] 过去 ${daysBack} 天: Ratio ${ratio.toFixed(2)}`);
+    return { value: ratio, isFallback: false };
+}
+
+/**
+ * 计算两个日期之间包含了多少有效工作分钟.
+ * @param {Date} start - 开始日期时间.
+ * @param {Date} end - 结束日期时间.
+ * @param {WorkConfig} config - 工作配置.
+ * @returns {number}
+ */
+function calculateWorkingMinutesBetween(start, end, config) {
+    if (end <= start) return 0;
+
+    let totalMinutes = 0;
+    let cursor = new Date(start);
+
+    while (cursor < end) {
+        if (isWorkingDay(cursor, config)) {
+            const dayStartTime = new Date(cursor).setHours(config.startHour, 0, 0, 0);
+            const dayEndTime = new Date(cursor).setHours(config.endHour, 0, 0, 0);
+            const intervalStart = Math.max(cursor.getTime(), dayStartTime);
+            const intervalEnd = Math.min(end.getTime(), dayEndTime);
+
+            if (intervalEnd > intervalStart) {
+                totalMinutes += (intervalEnd - intervalStart) / 60000;
+            }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(0, 0, 0, 0);
+    }
+    return totalMinutes;
+}
+
+/**
+ * 检查给定日期是否为有效工作日 (考虑周末和节假日).
+ * @param {Date} date - 需要检查的日期对象.
+ * @param {WorkConfig} config - 工作配置.
+ * @returns {boolean}
+ */
+function isWorkingDay(date, config) {
+    const day = date.getDay();
+    if (!config.workingDays.includes(day)) {
+        return false; // 非工作日
+    }
+    // 预留节假日扩展
+    if (config.holidays && config.holidays.length > 0) {
+        // 使用本地时间拼接 YYYY-MM-DD
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const dayStr = date.getDate().toString().padStart(2, '0');
+        const dateString = `${year}-${month}-${dayStr}`;
+
+        if (config.holidays.includes(dateString)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * 增加工作时间 (毫秒级高精度版)
+ * 修复了临界点(如17:59)无法跨天的问题
+ */
+function addWorkingMinutes(startDate, minutesToAdd, config) {
+    // 防御性编程：非法输入直接返回
+    if (minutesToAdd <= 0) return new Date(startDate);
+    if (!config || !config.workingDays || config.workingDays.length === 0) {
+        throw new Error("配置错误：未定义工作日 (workingDays is empty)");
+    }
+
+    let remainingMinutes = minutesToAdd;
+    let currentDate = new Date(startDate);
+
+    // 内部函数：推进到下一个有效的工作起始点
+    const advanceToNextAvailableSlot = () => {
+        let safetyLoop = 0;
+        // 循环条件：是非工作日 OR 已经过了下班时间 (>= 18:00)
+        while (!isWorkingDay(currentDate, config) || currentDate.getHours() >= config.endHour) {
+
+            // 熔断机制：防止配置错误导致死循环 (例如配置了全周无休假但又全是节假日)
+            if (safetyLoop++ > 3650) throw new Error("无法找到下一个工作日，请检查工作日配置");
+
+            // 推进到下一天
+            currentDate.setDate(currentDate.getDate() + 1);
+            // 重置到上班时间 09:00:00.000
+            currentDate.setHours(config.startHour, 0, 0, 0);
+        }
+
+        // 处理特殊情况：虽然是工作日，但在上班时间之前 (例如 08:00)
+        if (currentDate.getHours() < config.startHour) {
+            currentDate.setHours(config.startHour, 0, 0, 0);
+        }
+    };
+
+    // 1. 初始校准：如果起始时间在周末或半夜，先推到工作时间
+    advanceToNextAvailableSlot();
+
+    // 2. 毫秒级推进循环
+    while (remainingMinutes > 0) {
+        const currentMs = currentDate.getTime();
+
+        // 计算当天的下班时刻 (毫秒)
+        const endOfDayDate = new Date(currentDate);
+        endOfDayDate.setHours(config.endHour, 0, 0, 0);
+        const endOfDayMs = endOfDayDate.getTime();
+
+        // 计算当天剩余可工作时间 (毫秒 -> 分钟)
+        // Math.max 确保不出现负数
+        const msLeftInDay = Math.max(0, endOfDayMs - currentMs);
+        const minutesLeftInDay = msLeftInDay / 60000;
+
+        // 浮点数比较容差 (Epsilon)
+        const EPSILON = 0.0001;
+
+        if (remainingMinutes <= minutesLeftInDay + EPSILON) {
+            // Case A: 当天能做完
+            const msToAdd = Math.floor(remainingMinutes * 60000);
+            currentDate.setTime(currentMs + msToAdd);
+            remainingMinutes = 0; // 结束循环
+        } else {
+            // Case B: 需要跨天
+            // 1. 消耗掉当天所有剩余时间
+            remainingMinutes -= minutesLeftInDay;
+
+            // 2. 强制将时间对齐到下班时刻 (18:00:00)
+            // 这一步至关重要：它保证了 getHours() === endHour
+            currentDate.setTime(endOfDayMs);
+
+            // 3. 寻找下一个工作日
+            // 因为现在是 18:00，advance 函数会判定已下班，自动推到明天 09:00
+            advanceToNextAvailableSlot();
+        }
+    }
+
+    return currentDate;
+}
+
+/**
+ * 匹配并消耗 Map 键值对
+ * @param {string[]} oldMessages - 原始字符串数组
+ * @param {Map<string, string>} mapObjectiveName2IncompleteEstimate - 键值对 Map (执行过程中会被修改)
+ * @returns {string[]} - 处理后的新数组
+ */
+function appendProportionToMessages(oldMessages, mapObjectiveName2IncompleteEstimate, allObjectivesIncompleteEstimate) {
+    // 注意：这里使用 .map 会遍历数组。
+    // 由于 kvMap 在循环内部被修改，后续的字符串会自动看到最新的 kvMap 状态。
+    return oldMessages.map(oldMessage => {
+        let matchedKey = null;
+        let appendValue = CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+
+        // 1. 遍历当前的 Map 查找匹配项
+        for (const [objectiveName, incompleteEstimate] of mapObjectiveName2IncompleteEstimate) {
+            if (oldMessage.includes(objectiveName)) {
+                matchedKey = objectiveName;
+                appendValue = computePercentage(incompleteEstimate, allObjectivesIncompleteEstimate) + "%";
+                // 2. 逻辑：只匹配第一个找到的 Key 就停止遍历
+                break;
+            }
+        }
+
+        // 3. 逻辑：如果找到了匹配项，将其从 Map 中移除
+        if (matchedKey !== null) {
+            //原来是为了提高效率，如果找到匹配的元素，则从Map中删除该元素，那么后面的遍历次数会逐渐减少。但是因为新的功能需要用到mapObjectiveName2IncompleteEstimate，删除元素的操作会导致其中没有元素可用，所以将其注释掉。
+            // mapObjectiveName2IncompleteEstimate.delete(matchedKey);
+            return oldMessage + "🧩⚖️: " + appendValue;
+        }
+
+        // 如果没有匹配到任何 Key，返回原字符串
+        return oldMessage;
+    });
+}
+
+function computePercentage(numerator, denominator) {
+    return denominator > 0 ? ((numerator / denominator) * 100).toFixed(1) : 0;
+}
+
+function getListObject(listName2search) {
+    let list2return = null;
+    const lists = rtm.getLists();
+    for (let list of lists) {
+        if (listName2search === list.getName()) {
+            list2return = list;
+            break;
+        }
+    }
+    return list2return;
+}
+
+function updateNote(task, newContent, prefix, suffix) {
+    if (isEmpty(prefix) && isEmpty(suffix)) {
+        throw new Error('At least one of prefix or suffix should be provided for searching note');
+    }
+
+    const notes = task.getNotes();
+    const findNote = (note) =>
+        (!prefix || note.getContent().startsWith(prefix)) &&
+        (!suffix || note.getContent().endsWith(suffix));
+
+    const existingNote = notes.find(findNote);
+
+    if (!existingNote) {
+        task.addNote(newContent);
+    } else if (existingNote.getContent() !== newContent) {
+        existingNote.delete();
+        task.addNote(newContent);
+    }
+}
+
+function isEmpty(str) {
+    return !str || str.trim() === CONFIG.SPECIAL_CHARS.EMPTY_STRING;
+}
+
+/**
+ * 核心入口：提取目标汇总信息（已去重 + 标记父目标）
+ */
+function buildObjectivesContext(selectedTasks, historyDays, extractWithinDue = true) {
+    // 1. 构建依赖图
+    const individualTaskGraphs = buildIndividualTaskGraphs(selectedTasks);
+
+    // 2. 【核心修改】解构获取 净任务列表 和 父目标ID集合
+    const { netTasksMap: objectiveNetTasksMap, parentObjectiveIds } = resolveHierarchyAndFilterTasks(selectedTasks, individualTaskGraphs);
+
+    // 计算全局目标历史工作比率
+    const globalWorkRatio = calculateHistoricalWorkRatio(historyDays);
+
+    // 3. 基于净任务列表进行统计
+    return selectedTasks.map(objective => {
+        const objectiveId = objective.getId();
+
+        // 标记是否为父目标（即包含了其他选中的目标）
+        const isParentObjective = parentObjectiveIds.has(objectiveId);
+
+        const netTasksOfObjective = objectiveNetTasksMap.get(objectiveId) || [];
+
+        // 4. 按完成状态分组
+        const completedAndIncomplete = groupByCompletion(netTasksOfObjective);
+        const allCompletedTasks = completedAndIncomplete.get('completed') || [];
+        let allIncompleteTasks = completedAndIncomplete.get('incomplete') || [];
+
+        // 4.1 移除目标本身
+        allIncompleteTasks = allIncompleteTasks.filter(t => t.getId() !== objectiveId);
+
+        // 4.2 处理重复任务实例
+        const incompleteRecurringTasks = allIncompleteTasks.filter(t => t.isRecurring() === true);
+        allIncompleteTasks = allIncompleteTasks.filter(t => t.isRecurring() === false);
+
+        const objectiveDueDate = objective.getDueDate();
+        if (objectiveDueDate) {
+            const endOfObjectiveDueDate = new Date(objectiveDueDate.getFullYear(), objectiveDueDate.getMonth(), objectiveDueDate.getDate(), 23, 59, 59);
+            const recurringTaskInstances = [];
+            incompleteRecurringTasks.forEach(task => {
+                if (task.isRecurring()) {
+                    collectRecurringTaskInstances(task, endOfObjectiveDueDate, recurringTaskInstances);
+                }
+            });
+            recurringTaskInstances.forEach(t => t.uncomplete());
+            allIncompleteTasks.push(...recurringTaskInstances);
+        } else {
+            allIncompleteTasks.push(...incompleteRecurringTasks);
+        }
+
+        // 5. 时间窗口过滤
+        let tasksToAnalyze_Completed = allCompletedTasks;
+        let tasksToAnalyze_Incomplete = allIncompleteTasks;
+
+        if (extractWithinDue && objectiveDueDate) {
+            const endOfObjectiveDueDate = new Date(objectiveDueDate.getFullYear(), objectiveDueDate.getMonth(), objectiveDueDate.getDate(), 23, 59, 59);
+            const isWithinDue = (task) => {
+                const d = task.getDueDate();
+                return d && d >= jan_01_1970 && d < endOfObjectiveDueDate;
+            };
+            tasksToAnalyze_Completed = allCompletedTasks.filter(isWithinDue);
+            tasksToAnalyze_Incomplete = allIncompleteTasks.filter(isWithinDue);
+        }
+
+        // 6. 基础信息提取
+        const completedStats = extractBasicInfo(tasksToAnalyze_Completed, individualTaskGraphs.get(objective));
+        const incompleteStats = extractBasicInfo(tasksToAnalyze_Incomplete, individualTaskGraphs.get(objective));
+
+        // 7. 计算衍生数据
+        const totalTasksCount = completedStats.countOfTasks + incompleteStats.countOfTasks;
+        const quantitativeCompletionPercentage = totalTasksCount > 0
+            ? ((completedStats.countOfTasks / totalTasksCount) * 100).toFixed(1)
+            : 0;
+
+        const totalTasksEstimate = completedStats.totalEstimate + incompleteStats.totalEstimate;
+        const estimateCompletionPercentage = totalTasksEstimate > 0
+            ? ((completedStats.totalEstimate / totalTasksEstimate) * 100).toFixed(1)
+            : 0;
+
+        const incompleteTasksWithoutDueDate = getTasksWithoutDueDate(tasksToAnalyze_Incomplete);
+        const incompleteTasksWithoutDueDateCount = incompleteTasksWithoutDueDate.length;
+
+        return {
+            objectiveId,
+            objectiveName: objective.getName(),
+            objectiveDueDate,
+            objectivePermalink: objective.getPermalink(),
+            // 【新增】是否为父目标标志
+            isParentObjective,
+            objectivePriority: objective.getPriority(),
+            completedTasksCount: completedStats.countOfTasks,
+            completedTasksEstimate: completedStats.totalEstimate,
+            unestimatedCompletedTasks: completedStats.unestimatedTasks,
+            unestimatedCompletedTasksCount: completedStats.countOfUnestimatedTasks,
+            completedTasks: tasksToAnalyze_Completed,
+            incompleteTasksCount: incompleteStats.countOfTasks,
+            incompleteTasksEstimate: incompleteStats.totalEstimate,
+            unestimatedIncompleteTasks: incompleteStats.unestimatedTasks,
+            unestimatedIncompleteTasksCount: incompleteStats.countOfUnestimatedTasks,
+            incompleteTasks: tasksToAnalyze_Incomplete,
+            totalTasksCount,
+            totalTasksEstimate,
+            quantitativeCompletionPercentage,
+            estimateCompletionPercentage,
+            incompleteTasksWithoutDueDate,
+            incompleteTasksWithoutDueDateCount,
+            globalWorkRatio: globalWorkRatio.value,
+            globalWorkRatio_fallback: globalWorkRatio.isFallback
+        };
+    });
+}
+
+/**
+ * 【严格审查通过】解析层级关系并过滤任务（同时识别父目标）
+ * 算法复杂度：O(N^2 * M)，其中 N 为选中目标数，M 为单个目标的任务数。
+ * 
+ * @returns {{ netTasksMap: Map<string, Task[]>, parentObjectiveIds: Set<string> }} 
+ * 返回包含两个对象的结构：
+ * 1. netTasksMap: 剔除子目标任务后的净任务列表
+ * 2. parentObjectiveIds: 被识别为"父目标"的ID集合
+ */
+function resolveHierarchyAndFilterTasks(selectedTasks, individualTaskGraphs) {
+    // 1. Scope Mapping
+    // 预计算每个目标的“全量任务ID集合”，用于 O(1) 查找包含关系
+    const scopeMap = new Map();
+
+    selectedTasks.forEach(objective => {
+        const allSubtasks = assembleAllTasksOfObjective(objective, individualTaskGraphs);
+        // 使用 Set 存储 ID，保证查找速度和唯一性
+        const taskIdsSet = new Set();
+        allSubtasks.forEach(t => taskIdsSet.add(t.getId()));
+
+        scopeMap.set(objective.getId(), {
+            tasks: allSubtasks,
+            taskIds: taskIdsSet
+        });
+    });
+
+    // 2. Exclusion Set Calculation & Parent Detection
+    // 计算每个目标需要“剔除”的任务 ID，同时识别哪些目标是“父目标”
+    const exclusionMap = new Map();
+    const parentObjectiveIds = new Set(); // 【新增】用于存储父目标的ID
+
+    for (const parentObj of selectedTasks) {
+        const parentId = parentObj.getId();
+        const parentScope = scopeMap.get(parentId);
+        const idsToExclude = new Set();
+
+        for (const childObj of selectedTasks) {
+            const childId = childObj.getId();
+
+            // 跳过自身比较
+            if (parentId === childId) continue;
+
+            // 判定核心：如果 Child 目标本身 存在于 Parent 的任务范围内
+            if (parentScope.taskIds.has(childId)) {
+                // console.log(`Detected Hierarchy: ${parentObj.getName()} contains ${childObj.getName()}`);
+
+                // 【新增】只要检测到包含关系，就标记 parentId 为父目标
+                // Set 会自动处理重复添加，所以不用担心多次添加
+                parentObjectiveIds.add(parentId);
+
+                // 1. 排除 Child 目标本身
+                idsToExclude.add(childId);
+
+                // 2. 排除 Child 目标包含的所有任务
+                const childScope = scopeMap.get(childId);
+                if (childScope) {
+                    childScope.taskIds.forEach(id => idsToExclude.add(id));
+                }
+            }
+        }
+        exclusionMap.set(parentId, idsToExclude);
+    }
+
+    // 3. Net Task Generation
+    // 生成最终的净任务列表
+    const netTasksMap = new Map();
+
+    selectedTasks.forEach(objective => {
+        const objId = objective.getId();
+        const fullScope = scopeMap.get(objId);
+        const excludedIds = exclusionMap.get(objId);
+
+        // 过滤：保留那些 ID 不在排除集合中的任务
+        const netTasks = fullScope.tasks.filter(task => !excludedIds.has(task.getId()));
+
+        netTasksMap.set(objId, netTasks);
+    });
+
+    // 【修改】返回结构改变，同时返回 Map 和 Set
+    return { netTasksMap, parentObjectiveIds };
+}
+
+
+/**
+ * 保存报表消息 (Fingerprint Singleton Mode)
+ * 逻辑：基于 "周期名 |" 锚定任务。
+ * 健壮性增强：强制确保新标题包含指纹，防止下次搜索失效。
+ * 
+ * @param {string} periodName - 周期名 (如 "本周")，这是唯一标识符的核心
+ * @param {string} title - 显示标题
+ * @param {Array|string} noteContents - 笔记内容
+ */
+function saveMessage(periodName, title, noteContents) {
+    // 1. 基础校验
+    if (!periodName || typeof periodName !== 'string') {
+        throw new Error("[saveMessage] periodName 必须是非空字符串");
+    }
+
+    // 2. 构造搜索指纹 (Fingerprint)
+    // 格式: "周期名 |" (例如 "本周 |")
+    const searchFingerprint = `${periodName} |`;
+
+    // 3. 🚨 核心防御：指纹一致性检查
+    // 如果传入的 title 不包含指纹，说明调用方格式有误。
+    // 我们必须强制修正 title，否则下次脚本运行将无法通过 fingerprint 找到这个任务。
+    let finalTitle = title;
+    if (!finalTitle.includes(searchFingerprint)) {
+        console.warn(`[Warning] 标题 "${title}" 缺少指纹 "${searchFingerprint}"，已自动修正。`);
+        // 自动拼装: "本周 | 原标题"
+        finalTitle = `${searchFingerprint} ${title}`;
+    }
+
+    // 4. 生成带时间戳的完整任务名
+    const newTaskName = `${finalTitle} @ ${formatDateTime(new Date())}`;
+
+    // 5. 获取列表 (容错)
+    const listName = "♻️";
+    let recycleList = getListObject(listName);
+    if (!recycleList) {
+        // console.log(`[System] 列表 "${listName}" 未找到，使用 Inbox。`);
+        recycleList = rtm.getInbox();
+    }
+
+    // 6. 查找任务
+    // 策略: Tag 过滤 -> 指纹匹配
+    const candidates = rtm.getTasks(`tag:"${CONFIG.TAGS.SCRIPT_REPORT}"`);
+    let targetTask = candidates.find(t => t.getName().includes(searchFingerprint));
+
+    if (targetTask) {
+        // === A. 更新模式 ===
+        console.log(`[Report] 指纹命中 "${searchFingerprint}" -> 更新任务: ${targetTask.getName()}`);
+
+        // 状态复活
+        if (targetTask.isCompleted()) targetTask.uncomplete();
+
+        // 位置归位
+        if (recycleList && targetTask.getList().getId() !== recycleList.getId()) {
+            targetTask.setList(recycleList);
+        }
+
+        // 更新标题
+        targetTask.setName(newTaskName);
+
+        // 清空笔记 (倒序安全删除)
+        const oldNotes = targetTask.getNotes();
+        for (let i = oldNotes.length - 1; i >= 0; i--) {
+            oldNotes[i].delete();
+        }
+
+    } else {
+        // === B. 创建模式 ===
+        console.log(`[Report] 指纹未命中 -> 创建新任务: ${newTaskName}`);
+
+        targetTask = rtm.addTask(newTaskName);
+        if (recycleList) targetTask.setList(recycleList);
+        targetTask.addTags(CONFIG.TAGS.SCRIPT_REPORT);
+    }
+
+    // 7. 写入新笔记
+    // 统一在这里写入，避免重复代码
+    addNotesToTask(targetTask, noteContents);
+
+    return targetTask;
+}
+
+/**
+ * 辅助：安全添加笔记
+ */
+function addNotesToTask(task, contents) {
+    const contentArray = Array.isArray(contents) ? contents : [contents];
+
+    contentArray.forEach(content => {
+        if (content && String(content).trim() !== "") {
+            task.addNote(String(content));
+        }
+    });
+}
+
+/**
+ * 将错误信息保存为一个待办任务，便于后续处理
+ */
+function reportErrorToTask(title, noteContent) {
+    // 1. 创建任务
+    const recycleList = getListObject("♻️");
+    const errorTask = rtm.addTask(title).setList(recycleList);
+
+    // 2. 设置高优先级，引起注意
+    errorTask.setPriority(rtm.Priority.High); // Priority 1 是最高优先级 (红色)
+
+    // 3. 添加详细的笔记
+    // 这里不需要像 updateNote 那样去查找前缀后缀，因为是新任务，直接加就行
+    errorTask.addNote(noteContent);
+
+    // 4. (可选) 添加一个标签方便筛选
+    errorTask.addTags(`${CONFIG.TAGS.SCRIPT_ERROR}`);
+
+    console.log(`[Error Report] 已生成错误报告任务: ${title}`);
+
+    return errorTask.getPermalink();
+}
+
+/**
+ * 基础策略：根据规划周期的“意图”推荐历史窗口 (Intent-based)
+ * 修正：统一季度与长周期的历史窗口逻辑，保持数学与意图的一致性。
+ */
+function getBaseHistoryDays(cutoffDate, periodName) {
+    // 1. 【优先】基于显式意图 (Period Name) 锁定窗口
+    if (periodName && typeof periodName === 'string') {
+        const p = periodName;
+
+        // 年/半年粒度 -> 看半年 (180天)
+        if (p.includes('年') || p.includes('半年')) {
+            return 180;
+        }
+
+        // 季粒度 -> 看半年 (180天)
+        // ✅ 修正：从 90 改为 180。
+        // 理由：根据数学兜底逻辑，>60天的周期应参考180天历史。
+        // 使用两个季度的数据来预测一个季度，比1:1预测更平滑稳定。
+        if (p.includes('季')) {
+            return 180;
+        }
+
+        // 月粒度 -> 看季均 (90天)
+        if (p.includes('月')) {
+            return 90;
+        }
+
+        // 周粒度 -> 看月均 (30天)
+        if (p.includes('周')) {
+            return 30;
+        }
+
+        // 日粒度 -> 看近况 (7天)
+        if (p.includes('日') || p.includes('天')) {
+            return 7;
+        }
+    }
+
+    // 2. 【兜底】基于时间差的数学估算 (Math Fallback)
+    const nowTime = now.getTime();
+    const cutoffTime = (cutoffDate && cutoffDate.getTime) ? cutoffDate.getTime() : nowTime;
+
+    const horizonDays = Math.ceil((cutoffTime - nowTime) / (1000 * 60 * 60 * 24));
+    const h = Math.max(1, horizonDays);
+
+    if (h <= 3) return 7;       // 生存模式
+    if (h <= 14) return 30;     // 冲刺模式
+    if (h <= 60) return 90;     // 项目模式 (月度/双月度)
+
+    // 涵盖了 90天(季度) 及更长周期
+    return 180;                 // 愿景模式
+}
+
+/**
+ * 智能获取日均工时 (自适应版 - 严格审查版)
+ * 解决“假期黑洞”和“新手期稀释”问题，并优化 API 调用次数。
+ * 
+ * 依赖函数: getAverageDailyWorkhoursOnObjective(days)
+ * 
+ * @returns {Object} { minutes: number, daysUsed: number, note: string }
+ */
+function getAdaptiveAverageWorkhours(cutoffDateTime, periodName) {
+    // 1. 获取基础建议天数
+    let historyDays = getBaseHistoryDays(cutoffDateTime, periodName);
+
+    // 2. 初次计算 (API Call #1)
+    let avgMins = getAverageDailyWorkhoursOnObjective(historyDays);
+
+    // 定义“异常低值”阈值 (每天少于 10 分钟视为几乎不工作)
+    const LOW_ACTIVITY_THRESHOLD = 10;
+    let note = `(基于近${historyDays}天)`;
+    let isModified = false;
+
+    // --- 🛡️ 场景 A: 假期黑洞防御 (Vacation Defense) ---
+    // 触发条件: 窗口较短 (<=30) AND 产出极低
+    if (historyDays <= 30 && avgMins < LOW_ACTIVITY_THRESHOLD) {
+        console.log(`[Adaptive] 检测到近期(${historyDays}天)产出过低(${avgMins.toFixed(1)}m)，尝试寻找长期均值...`);
+
+        // 尝试扩大到 90 天 (API Call #2 - 按需触发)
+        const longTermAvg = getAverageDailyWorkhoursOnObjective(90);
+
+        // 只有当长期均值是近期的 2 倍以上时，才采纳 (避免长期确实也没干活的情况)
+        if (longTermAvg > Math.max(avgMins * 2, LOW_ACTIVITY_THRESHOLD)) {
+            avgMins = longTermAvg;
+            historyDays = 90;
+            note = `(检测到近期休假，已回退至近90天均值)`;
+            isModified = true;
+        }
+    }
+
+    // --- 🛡️ 场景 B: 新手期/断档期防御 (Dilution Defense) ---
+    // 触发条件: 窗口很长 (>60) AND 刚才没有被修改过
+    // 逻辑：防止把 180 天的分母强加给只用了 30 天的用户
+    if (historyDays > 60 && !isModified) {
+
+        // 我们假设：如果数据是均匀的，短期均值应该和长期均值差不多 (误差在 50% 以内)
+        // 如果短期均值 远大于 长期均值，说明长期数据被大量 0 稀释了
+
+        // (API Call #3 - 按需触发)
+        const shortTermAvg = getAverageDailyWorkhoursOnObjective(30);
+
+        // 判定标准：短期是长期的 2.5 倍以上
+        if (shortTermAvg > Math.max(avgMins * 2.5, LOW_ACTIVITY_THRESHOLD)) {
+            console.log(`[Adaptive] 长期均值(${avgMins.toFixed(1)}m)远低于月均(${shortTermAvg.toFixed(1)}m)，判定为数据稀释。`);
+
+            // 进一步检查：是不是连 30 天都被稀释了？(极度新手，只用了几周)
+            // 只有当 30天均值 依然比较大时才值得检查，为了性能，这里只做两层回退
+
+            avgMins = shortTermAvg;
+            historyDays = 30;
+            note = `(数据样本不足，已智能回退至近30天)`;
+        }
+    }
+
+    return {
+        minutes: avgMins,
+        daysUsed: historyDays,
+        note: note
+    };
+}
