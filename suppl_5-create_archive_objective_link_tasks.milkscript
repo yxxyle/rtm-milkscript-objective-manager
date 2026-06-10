@@ -1,0 +1,1869 @@
+const formatDate = (date) => date ? `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}` : 'N/A';
+const formatDateTime = (date) => date ? `${formatDate(date)} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}` : 'N/A';
+
+const weekdays = {
+    zh: ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'],
+    en: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+};
+
+const formatDateTimeWithWeekday = (date, lang = 'zh') => {
+    if (!date || isNaN(date.getTime?.() ?? new Date(date).getTime())) return 'N/A';
+    const weekday = weekdays[lang]?.[date.getDay()] ?? '星期日';
+    return `${formatDateTime(date)} ${weekday}`;
+};
+
+// =================================================================
+// 1. 配置中心 (Configuration Center)
+// =================================================================
+const CONFIG = {
+    PROMPTS: {
+        OBJECTIVE_TYPE: '1.Input objective type number(Default is 6-quick wins🎉) for NEW objective. 1-long-term visions🔭; 2-yearly goals🗽; 3-quarterly objectives🎯; 4-monthly milestones⛳; 5-weekly wins📌; 6-quick wins🎉',
+        OBJECTIVE_NAME: '2.Give name to NEW objective.',
+        OBJECTIVE_DUE_DATE: '3.When(default is today) do you want to due the objective?',
+        OBJECTIVE_START_DATE: '4.When(default is Never) do you want to start the objective?',
+    },
+    TAGS: {
+        OBJECTIVE_TYPES: ['1.1-🔭', '1.2-🗽', '1.3-🎯', '1.4-⛳', '1.5-📌', '1.10-🎉'],
+        DEFAULT_OBJECTIVE_TYPE: '1.10-🎉',
+        DEFAULT_COMPLETION: '2.4-done',
+        COMPLETED_STATUS: ['2.4-done', '2.7-cancelled', '2.8-closed', '2.9-failed', '2.10-abandon', '2.12-unproductive', '2.13-reduced', '2.14-lost'],
+        DEFAULT_TASK_TYPE: '1.6-▶️',
+        STATUS_TAG_PREFIX: '2.',
+        OBJECTIVE_TAG_OPEN_PREFIX: '0_',
+        OBJECTIVE_TAG_CLOSE_PREFIX: '99_',
+        OBJECTIVE_TYPE_PREFIX: '1.'
+    },
+    NOTE_PREFIX: {
+        TAG_PERMALINK: "https://www.rememberthemilk.com/app/#tag/",
+        CHILD_NOTE: "child",
+        PARENT_NOTE: "parent",
+        SUMMARY_NOTE: "summary", // NEW: 用于识别摘要笔记的前缀
+        DUE_DATE: "due@"
+    },
+    CHAR_TO_REMOVE_FROM_NAME: ["(", ")"]
+};
+
+let _globalTagsCache = null;
+function getGlobalTags() {
+    if (!_globalTagsCache) {
+        _globalTagsCache = rtm.getTags();
+    }
+    return _globalTagsCache;
+}
+
+// =================================================================
+// 2. 主逻辑入口 (Main Logic Entry Point)
+// =================================================================
+const newObjectiveTypeTagNum = rtm.args[CONFIG.PROMPTS.OBJECTIVE_TYPE];
+const objectiveName = rtm.args[CONFIG.PROMPTS.OBJECTIVE_NAME];
+const selectedDueDate = rtm.args[CONFIG.PROMPTS.OBJECTIVE_DUE_DATE];
+const selectedStartDate = rtm.args[CONFIG.PROMPTS.OBJECTIVE_START_DATE];
+
+(function main() {
+    const selectedTasks = rtm.getSelectedTasks();
+
+    if (isSyncMode(selectedTasks)) {
+        console.log("Entering Synchronization Mode...");
+        return runSynchronization(selectedTasks[0]);
+        console.log("Synchronization complete.");
+    } else {
+        console.log("Entering Linking Mode...");
+        return runLinking(selectedTasks);
+        console.log("Linking complete.");
+    }
+})();
+
+// =================================================================
+// 3. 核心工作流函数 (Core Workflow Functions)
+// =================================================================
+
+/**
+ * MODIFIED: 同步模式工作流，增加了目标完成情况摘要笔记
+ * @param {Object} objective - 被选中的父目标任务。
+ */
+function runSynchronization(objective) {
+    /**
+     * 1. 找到用于关联的 goalTag
+     * hasUpToDateGoalTag不仅仅是个获取标签的工具，它是整个同步流的**“健康状态断言（Health Assertion）”**。
+     * 它确保了同步这台精密仪器只有在齿轮绝对吻合时才启动。
+     */
+    const goalTag = hasUpToDateGoalTag(objective)[1]
+    // console.log(`goalTag is ${goalTag.getName()}`)
+
+    if (!goalTag) {
+        throw new Error(`Objective "${objective.getName()}" does not have a valid goalTag (starts with '0_' or '99_'). Cannot sync.`);
+    }
+
+    let individualTaskGraphs = buildIndividualTaskGraphs([objective])
+
+    // 2. 查找所有关联的子任务
+    const allTasksOfObjective = assembleAllTasksOfObjective(objective, individualTaskGraphs)
+
+    let childTasks = Array.from(allTasksOfObjective).filter(t => t.getId() !== objective.getId());
+    // 对子任务数组进行排序使其按特定规则展示在note中
+    childTasks = sortTasksByStatusThenByDueDate(childTasks);
+    childTasks = adaptSortedTasksForUI(childTasks);
+
+    // 3. 清理旧的子任务笔记
+    const oldChildNotes = objective.getNotes().filter(n => n.getContent().startsWith(CONFIG.NOTE_PREFIX.CHILD_NOTE));
+    oldChildNotes.forEach(note => note.delete());
+
+    // 4. 重新生成并添加新的子任务笔记
+    childTasks.forEach(task => {
+        const childInfoNote = createChildInfoNote(task, childTasks);
+        objective.addNote(childInfoNote);
+    });
+
+    const hasChildren = childTasks.length > 0;
+    const allChildrenCompleted = hasChildren && childTasks.every(isTaskConsideredAsCompleted);
+    // 只有在真正拥有【未完成子任务】时，才判定为有遗留产物
+    const hasIncompleteChildren = hasChildren && childTasks.some(t => !isTaskConsideredAsCompleted(t));
+
+    // 5. 状态聚合1：如果所有子任务都已完成，则自动完成父目标
+    if (allChildrenCompleted && !isTaskTaggedAsCompleted(objective) && !isTaskReallyCompleted(objective)) {
+        // use isTaskTaggedAsCompleted instead
+        objective.addTags(CONFIG.TAGS.DEFAULT_COMPLETION);
+        console.log(`All sub-tasks are complete. Objective "${objective.getName()}" has been marked as done.`);
+
+        updateNote(objective, CONFIG.NOTE_PREFIX.DUE_DATE + objective.getDueDate(), CONFIG.NOTE_PREFIX.DUE_DATE, null);
+        objective.setDueTime(new Date())
+
+        const goalTag_permalink = manageGoalTag(objective);
+        const isGoalTagChanged = goalTag_permalink[1]
+        const permalink = goalTag_permalink[2]
+        if (isGoalTagChanged) {
+            return rtm.newMessage(
+                `修改后的目标标签的永久链接`,
+                `${permalink}`
+            );
+        }
+    }
+
+    // 状态聚合2：如果不是所有子任务都已完成，则移除父目标的完成状态
+    if (!allChildrenCompleted && isTaskTaggedAsCompleted(objective) && !isTaskReallyCompleted(objective)) {// use isTaskTaggedAsCompleted instead
+        objective.removeTags(CONFIG.TAGS.DEFAULT_COMPLETION);
+        console.log(`Not all sub-tasks are complete. Objective "${objective.getName()}" has been removed done status.`);
+        objective.setDueTime(new Date(findAndGetNoteContent(objective, CONFIG.NOTE_PREFIX.DUE_DATE)))
+
+        const goalTag_permalink = manageGoalTag(objective);
+        const isGoalTagChanged = goalTag_permalink[1]
+        const permalink = goalTag_permalink[2]
+        if (isGoalTagChanged) {
+            return rtm.newMessage(
+                `修改后的目标标签的永久链接`,
+                `${permalink}`
+            );
+        }
+    }
+
+    // 状态聚合3：如果目标处于关闭状态，那么那些已经标注为完成状态的子任务也应该被关闭
+    // 如果还有未完成的子任务，那么则创建一个后续的目标，并且将这些未完成的子任务附加到该新建的后续目标上
+    if (isTaskReallyCompleted(objective)) {
+        if (!hasIncompleteChildren) {
+            childTasks.forEach(t => t.complete())
+            archiveGoalTag(objective);
+        }
+        else {
+            // group by completion
+            const completedAndIncomplete = groupByCompletion(childTasks);
+
+            let completedChildTasks = completedAndIncomplete.get('completed');
+            completedChildTasks.forEach(t => t.complete());
+
+            let incompleteChildTasks = completedAndIncomplete.get('incomplete');
+            const directIncompleteChildTasks = getDirectIncompleteChildTasks(individualTaskGraphs, objective, goalTag, incompleteChildTasks);
+            // remove tag and parent note first from incompleteChildTasks
+            directIncompleteChildTasks.forEach(t => {
+                //remove old objective parent tag
+                t.removeTags(goalTag.getName());
+                // delete parent info note of imcompleteChildTask
+                t.getNotes().filter(n => n.getContent().startsWith(CONFIG.NOTE_PREFIX.PARENT_NOTE) &&
+                    n.getContent().endsWith(objective.getPermalink())).forEach(n => n.delete());
+            })
+
+            // 如果需要则创建父目标，否则使用现存的父目标
+            const [parentObjective, parentGoalTagName, needsParentLinking, parentGoalTagPermalink] = createParentObjective(objective)
+
+            // [关键修改]: 只要需要关联 (新建的，或刚被发现的现存目标)，就执行关联动作
+            if (needsParentLinking && parentObjective) {
+                //remove old parent tag from current objective
+                removeOldParentGoalTagFromObjective(objective, parentGoalTagName)//right
+                //add new created parent goal tag
+                objective.addTags(parentGoalTagName)//right
+                //set url as new created parent objective's permalink
+                objective.setUrl(parentObjective.getPermalink())//right
+
+                // add parent info of new created parent objective
+                const [parentObjectiveTypeTag, parentObjectiveEmoji] = getTaskTypeInfo(parentObjective);
+                const parentInfoNote = `${CONFIG.NOTE_PREFIX.PARENT_NOTE}${parentObjectiveEmoji}: ${parentObjective.getName()}\n📛${formatDateTimeWithWeekday(parentObjective.getDueDate())}\n🔗${parentObjective.getPermalink()}`;
+                updateNote(objective, parentInfoNote, CONFIG.NOTE_PREFIX.PARENT_NOTE, null);//right
+            }
+
+            // 创建后续目标
+            const subsequentObjectiveDetails = createSubsequentObjective(objective, parentObjective, parentGoalTagName)
+            const subSequentObjective = subsequentObjectiveDetails[0];
+            const subsequentGoalTagName = subsequentObjectiveDetails[1];
+            const isSubsequentGoalTagNewlyCreated = subsequentObjectiveDetails[2]
+            const newGoalTagPermalink = subsequentObjectiveDetails[3]
+            // 关联未完成子任务
+            processSubTasks(directIncompleteChildTasks, subSequentObjective, subsequentGoalTagName, subSequentObjective.getList());
+
+            archiveGoalTag(objective);
+
+            // --- 整合消息通知：利用现有的两个变量，绝不遗漏链接 ---
+            if (needsParentLinking && isSubsequentGoalTagNewlyCreated) {
+                return rtm.newMessage(
+                    `成功构建目标关联网络`,
+                    `父级目标(已关联)🔗: ${parentGoalTagPermalink}\n后续目标(新创建)🔗: ${newGoalTagPermalink}`
+                );
+            } else if (needsParentLinking) {
+                return rtm.newMessage(
+                    `父级目标标签(已关联)永久链接`,
+                    `${parentGoalTagPermalink}`
+                );
+            } else if (isSubsequentGoalTagNewlyCreated) {
+                return rtm.newMessage(
+                    `新建的后续目标标签永久链接`,
+                    `${newGoalTagPermalink}`
+                );
+            }
+        }
+    }
+}
+
+/**
+ * 清除目标身上过期的父级目标标签
+ * @param {Object} objective - 当前目标对象
+ * @param {string}[targetParentTagName] - 预期的（新的）父级目标标签名。若不传，则清空所有父级标签。
+ */
+function removeOldParentGoalTagFromObjective(objective, targetParentTagName) {
+    const taskName = objective.getName();
+    const tagsToRemove = [];
+
+    // 1. 筛选出不属于自己专属标签的其他所有标签
+    const tagsWithoutItsOwnTag = objective.getTags().filter(tag => {
+        return !isTagOwnedByTaskName(tag.getName(), taskName);
+    });
+
+    if (tagsWithoutItsOwnTag.length === 0) return;
+
+    // 2. 收集需要清理的旧父级标签
+    for (const tag of tagsWithoutItsOwnTag) {
+        const tagName = tag.getName();
+
+        // 只有目标系统标签（0_ 或 99_）才参与清理判断
+        if (isGoalTag(tagName)) {
+            if (targetParentTagName) {
+                // 如果明确了新的父级标签，只清理跟它“同源”（同名但日期/状态不同）的旧标签
+                // 借此保护其他的跨项目目标软链接
+                if (areTagsForSameObjective(tagName, targetParentTagName) && tagName !== targetParentTagName) {
+                    tagsToRemove.push(tagName);
+                }
+            } else {
+                // 如果没有指定父级（例如当前任务是顶层愿景），则它不应该有任何父级
+                // 采取“焦土政策”，无差别肃清所有残留的父级标签
+                tagsToRemove.push(tagName);
+            }
+        }
+    }
+
+    // 3. 性能优化：批量一次性移除所有废弃标签
+    if (tagsToRemove.length > 0) {
+        objective.removeTags(...tagsToRemove);
+        console.log(`[Tag Cleaned] 从 "${taskName}" 中清除了过期的父级标签:`, tagsToRemove.join(', '));
+    }
+}
+
+function archiveGoalTag(objective) {
+    // archive object's goal tag
+    const goalTag = hasUpToDateGoalTag(objective)[1]
+    if (!goalTag) {
+        throw new Error(`Objective "${objective.getName()}" does not have a valid goalTag (starts with '0_' or '99_'). Can't archive its goal tag.`);
+    }
+
+    const currentName = goalTag.getName();
+    const openPrefix = CONFIG.TAGS.OBJECTIVE_TAG_OPEN_PREFIX;
+    const closePrefix = CONFIG.TAGS.OBJECTIVE_TAG_CLOSE_PREFIX;
+
+    if (currentName.startsWith(openPrefix)) {
+        const archivedGoalTagName = closePrefix + currentName.substring(openPrefix.length);
+        goalTag.setName(archivedGoalTagName);
+
+        // update its goal tag permalink
+        let permalinkNote = objective.getNotes().find(note => note.getContent().startsWith(CONFIG.NOTE_PREFIX.TAG_PERMALINK));
+        if (permalinkNote) {
+            const existingPermalink = permalinkNote.getContent();
+            permalinkNote.setContent(existingPermalink.replace(/[^/]+$/, archivedGoalTagName));
+        } else {
+            objective.addNote(goalTag.getPermalink());
+        }
+    }
+}
+
+/**
+ * 基于当前目标来寻找或者创建父目标，返回[父级对象, 父级Tag名, 父级Tag是否新创建, 父级Permalink, 是否需要做父亲链接]
+ * 
+ */
+function createParentObjective(currentObjective) {
+    //首先构建父目标的名称
+    const parentObjectiveNameAndType = extractParentObjectiveNameAndType(currentObjective);//right
+    const parentObjectiveName = parentObjectiveNameAndType[0]
+    const parentObjectiveType = parentObjectiveNameAndType[1]
+
+    let needsParentLinking = false;
+    // parentObjectiveType is null, intend not to create parent object, just create subsequent objective
+    if (!parentObjectiveType) {
+        console.warn(`[Info] 无法为 "${currentObjective.getName()}" 生成父目标类型。它可能已是最高层级或无标准前缀。跳过父目标创建。`);
+        return [null, null, needsParentLinking, null];
+    }
+
+    //首先判断当前目标是否有父目标，有的话就直接用
+    const [hasParentObj, parentObj, parentObjTag] = hasParentObjective(currentObjective);//right
+
+    if (hasParentObj && parentObj !== null) {
+        return [parentObj, parentObjTag.getName(), needsParentLinking, parentObjTag.getPermalink()]
+    }
+    else {
+        //如果没有现成的父目标，就尝试看目前系统中是否有已经存在与parentObjectiveName同名的parentObjective，有的话直接用
+        const [parentObjectiveExisting, parentObjective, parentTag] = parentObjectiveExists(parentObjectiveName, parentObjectiveType)
+
+        if (parentObjectiveExisting) {
+            console.log(`parentObjective existing`)
+            needsParentLinking = true;
+            return [parentObjective, parentTag.getName(), needsParentLinking, parentTag.getPermalink()]
+        } else {
+            //create new parent objective
+            const newParentObjective = rtm.addTask(parentObjectiveName)
+                .setList(currentObjective.getList())
+                .setPriority(currentObjective.getPriority())
+                .setUrl(currentObjective.getUrl())// url is the parent url of current objective
+                .setStartDate(new Date())
+                .setDueDate(getNthNextDayOfWeek(6, 2));// here give the next of next Saturday which is after 1 week of subsequent object due date which is next Saturday
+
+            if (currentObjective.getParent()) {
+                newParentObjective.setParent(currentObjective.getParent());
+            }
+
+            // add all tag except status tag and objecitve own goal tag
+            const currentTaskName = currentObjective.getName();
+            currentObjective.getTags().forEach(tag => {
+                const tagName = tag.getName();
+                // remove status tag, remove objective type tag because parentObjective has its own parentObjectiveType
+                if (!tagName.startsWith(CONFIG.TAGS.STATUS_TAG_PREFIX) &&
+                    !tagName.startsWith(CONFIG.TAGS.OBJECTIVE_TYPE_PREFIX) &&
+                    !isTagOwnedByTaskName(tagName, currentTaskName)) {
+                    // parentObjective could get parent goal tag of current objective
+                    newParentObjective.addTags(tagName);
+                }
+            });
+
+            // add upgraded objective type
+            newParentObjective.addTags(parentObjectiveType)
+
+            // create goal tag of parent objective
+            const goalTag_permalink = manageGoalTag(newParentObjective);
+            const parentGoalTagName = goalTag_permalink[0];
+            const isParentGoalTagChanged = goalTag_permalink[1]
+            const parentGoalTagPermalink = goalTag_permalink[2]
+            console.log(`为 "${currentObjective.getName()}" 创建了父目标: "${parentObjectiveName}"`);
+            // 既然是全新创建的父目标，毫无疑问必须执行关联！
+            needsParentLinking = true;
+            return [newParentObjective, parentGoalTagName, needsParentLinking, parentGoalTagPermalink]
+        }
+    }
+}
+
+/**
+ * 判断当前目标是否有父目标，并严格反查返回其父目标对象本身以及父目标的 Goal Tag
+ * @param {Task} currentObjective - 当前目标任务对象
+ * @returns {[boolean, Task | null, Tag | null]} -[是否有父级, 父级任务对象, 父级Goal Tag对象]
+ */
+function hasParentObjective(currentObjective) {
+    if (!currentObjective) return [false, null, null];
+
+    // 2. 寻找当前目标身上属于父目标的 Goal Tags（可能有多个遗留，使用 filter 全部找出）
+    const parentGoalTags = currentObjective.getTags().filter(tag => {
+        const tagName = tag.getName();
+        if (!isGoalTag(tagName)) return false;
+        const isOwnTag = isTagOwnedByTaskName(tagName, currentObjective.getName());
+
+        // 如果是目标标签，且不是自己的标签，那就是父级留下的标签
+        return !isOwnTag;
+    });
+
+    if (parentGoalTags.length === 0) {
+        return [false, null, null]; // 连印记都没有，绝对没有父目标
+    }
+
+    // 3. 增强保险：从 URL 或 Note 中提取预期的父级 Permalink（解决快赢目标无 URL 的 Bug）
+    let expectedParentPermalink = currentObjective.getUrl() || null;
+
+    if (!expectedParentPermalink) {//如果当前目标没有url，那么则从从当前目标的note中去获取父目标的url
+        const parentNote = currentObjective.getNotes().find(n =>
+            n.getContent().startsWith(CONFIG.NOTE_PREFIX.PARENT_NOTE)
+        );
+        if (parentNote) {
+            const linkMatch = parentNote.getContent().match(/🔗\s*(https:\/\/[^\s]+)/);
+            if (linkMatch) {
+                expectedParentPermalink = linkMatch[1];
+            }
+        }
+    }
+
+    // 4. 寻找父目标对象本身
+    for (const parentTag of parentGoalTags) {
+        const candidateTasks = parentTag.getTasks() || [];
+
+        for (const task of candidateTasks) {
+            // 排除自己
+            if (task.getId() === currentObjective.getId()) continue;
+
+            // 核心判断 A：这个特定的 parentTag 是否严格归属于该候选任务？
+            // 【关键改造】：使用新函数，验证父级标签是否真正属于这个候选任务
+            const isOwnerOfTag = isTagOwnedByTaskName(parentTag.getName(), task.getName());
+
+            // 核心判断 B：Permalink 匹配（使用刚提取的 expectedParentPermalink，且防止 null===null）
+            const isPermalinkMatched = !!expectedParentPermalink && (task.getPermalink() === expectedParentPermalink);
+
+            // 只要满足其一，它就是真正的父节点
+            if (isOwnerOfTag || isPermalinkMatched) {
+                return [true, task, parentTag];
+            }
+        }
+    }
+
+    // 5. 兜底策略：Tag 存在，但实体已丢失（孤儿节点）
+    console.warn(`[Warning] 找到父级标签，但未能找到对应的父目标任务对象。父级可能已被删除或脱链。`);
+    // 默认返回找到的第一个父级 Tag 供后续清理使用
+    return [true, null, parentGoalTags[0]];
+}
+
+/**
+ * 判断当前目标是否已经拥有一个合法的父目标
+ * @param {string} parentObjectiveName - 父目标名称
+ * @returns {[boolean, Task | null, Tag | null]}
+ */
+function parentObjectiveExists(parentObjectiveName, parentObjectiveType) {
+    // Step 1: 获取所有可能的父目标（未完成的同名任务），如果存在多个，它们尽管都包含parentObjectiveName，但日期部分可能不同
+    const potentialParents = rtm.getTasks(`name:${parentObjectiveName} and status:incomplete`);
+    console.log(`potentialParents ${potentialParents.length}`)
+    if (!potentialParents || potentialParents.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 2: 过滤出真正的目标（Objective）类型任务
+    const objectiveCandidates = potentialParents.filter(objective => {
+        const [isObjective] = doesTaskHoldAnyTag(
+            objective,
+            [parentObjectiveType],//判断目标任务的目标类型是否是指定的parentObjectiveType
+            CONFIG.TAGS.DEFAULT_TASK_TYPE
+        );
+        return isObjective;
+    });
+    console.log(`objectiveCandidates ${objectiveCandidates.length}`)
+    if (objectiveCandidates.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 3: objectiveCandidates已经是包含父目标名称的且目标类型相符的候选父目标，接下来要验证的是父目标拥有自己的目标标签, 只要候选父目标的某个标签中包含它自己的名称即可。
+    const validParentObjectives = objectiveCandidates.filter(objective => {
+        const ownTag = objective.getTags().find(tag =>
+            isTagOwnedByTaskName(tag.getName(), objective.getName())
+        );
+        return ownTag !== undefined;
+    });
+    console.log(`validParentObjectives ${validParentObjectives.length}`)
+    if (validParentObjectives.length === 0) {
+        return [false, null, null];
+    }
+
+    /**
+     * 看是否有完全匹配的父目标，如果有的话，则返回第一个。
+     * 这是一个“优中选优”的逻辑。上一行代码中，你已经用宽容匹配 isTagOwnedByTaskName 把所有候选的父目标都找出来了。
+     * 这一步用精确匹配，是在做**“健康度过滤”**：优先挑选那些标签日期和任务日期完美同步的“健康父目标”。
+     * 如果找不到，底部还有兜底的 returnFirstMatchParent(validParentObjectives)。逻辑无懈可击！
+     */
+    const trueParentObjectives = validParentObjectives.filter(objective => {
+        const [hasOwnTag] = hasUpToDateGoalTag(objective);
+        return hasOwnTag;
+    });
+    console.log(`trueParentObjectives ${trueParentObjectives.length}`)
+    if (trueParentObjectives.length > 0) {
+        return returnFirstMatchParent(trueParentObjectives)
+    }
+
+    // 兜底，从validParentObjectives取第一个有效父目标
+    return returnFirstMatchParent(validParentObjectives);
+
+}
+
+function returnFirstMatchParent(candidateParents) {
+    // 成功匹配：返回第一个找到的父目标以及它的专属目标标签
+    const matchedParent = candidateParents[0];
+    const parentGoalTag = matchedParent.getTags().find(tag =>
+        isTagOwnedByTaskName(tag.getName(), matchedParent.getName())
+    );
+
+    return [true, matchedParent, parentGoalTag];
+}
+
+function subsequentObjectiveExists(currentObjective, subsequentObjectiveName) {
+    // Step 1: 获取所有可能的后续目标（未完成的同名任务）
+    console.log(`subsequentObjectiveName ${subsequentObjectiveName}`)
+    const potentialSubsequences = rtm.getTasks(`name:${subsequentObjectiveName} and status:incomplete`);
+    console.log(`potentialSubsequences ${potentialSubsequences.length}`)
+    if (!potentialSubsequences || potentialSubsequences.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 2: 过滤出真正的目标（Objective）类型任务 👌
+    const subsequentCandidates = potentialSubsequences.filter(objective => {
+        const [isObjective] = doesTaskHoldAnyTag(
+            objective,
+            CONFIG.TAGS.OBJECTIVE_TYPES,
+            CONFIG.TAGS.DEFAULT_TASK_TYPE
+        );
+        return isObjective;
+    });
+    console.log(`subsequentCandidates ${subsequentCandidates.length}`)
+    if (subsequentCandidates.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 3: 后续目标必须拥有自己的标签 👌
+    const validSubsequentObjectives = subsequentCandidates.filter(objective => {
+        const ownTag = objective.getTags().find(tag => isTagOwnedByTaskName(tag.getName(), objective.getName()));
+        return ownTag !== undefined;
+    });
+    console.log(`validSubsequentObjectives ${validSubsequentObjectives.length}`)
+    if (validSubsequentObjectives.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 4-1:  从当前目标的tags中找潜在的父目标标签，只要标签是目标标签而且不是我自己的标签，就是潜在的父目标标签。ok
+    const potentialParentGoalTags = currentObjective.getTags().filter(tag => {
+        const tagName = tag.getName();
+        // 【关键改造】：只要是目标标签且不属于当前任务自己，那就是父级标签
+        return isGoalTag(tagName) && !isTagOwnedByTaskName(tagName, currentObjective.getName());
+    });
+
+    let matchedByGoalTag = [];
+
+    // 4-2: 分支比对
+    // 分支 A：当前目标有父级 -> 后续目标也必须有完全相同的父级标签
+    if (potentialParentGoalTags.length > 0) {
+        // 分支 A：当前目标有父级 -> 后续目标也必须有完全相同的父级标签
+        matchedByGoalTag = validSubsequentObjectives.filter(objective => {
+            // 宽容容错匹配：只要候选目标拥有当前目标的【任意一个】父级标签，即视为通过初始筛选
+            return potentialParentGoalTags.some(parentTag => {
+                const expectedParentTagName = parentTag.getName();
+                const [hasParentGoalTag] = doesObjectiveHaveItsParentGoalTag(objective, expectedParentTagName);
+                return hasParentGoalTag;
+            });
+        });
+    }
+    else {
+        // 分支 B：当前目标无父级（如顶层 Vision） -> 后续目标必须也没有任何父级标签
+        matchedByGoalTag = validSubsequentObjectives.filter(objective => {
+            // 反查候选者是否有除自己以外的目标标签
+            const candidateParentTags = objective.getTags().filter(tag => {
+                const tagName = tag.getName();
+                const isOwnTag = isGoalTag(tagName) && isTagOwnedByTaskName(tagName, objective.getName());
+                return isGoalTag(tagName) && !isOwnTag;
+            });
+            return candidateParentTags.length === 0; // 数组为空说明它也是个顶层孤狼
+        });
+    }
+    console.log(`subsequent matchedByGoalTag ${matchedByGoalTag.length}`)
+    if (matchedByGoalTag.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 5: 后续目标的链接必须与当前目标的链接一致，都指向父目标的permalink
+    const matchedByUrl = matchedByGoalTag.filter(objective => {
+        return objective.getUrl() === currentObjective.getUrl();
+    });
+    console.log(`subsequent matchedByUrl ${matchedByUrl.length}`)
+    if (matchedByUrl.length === 0) {
+        return [false, null, null];
+    }
+
+    // Step 6: 成功匹配
+    const matchedSubsequent = matchedByUrl[0];
+
+    // 使用宽容匹配，找出后续目标自身的专属标签（哪怕它日期过期了，我们也捏着鼻子认，防止脚本崩溃报错）
+    const subsequentOwnTag = matchedSubsequent.getTags().find(tag =>
+        isTagOwnedByTaskName(tag.getName(), matchedSubsequent.getName())
+    );
+
+    return [true, matchedSubsequent, subsequentOwnTag];
+}
+
+/**
+ * 严谨判断目标身上是否拥有指定的父级目标标签 (完全免疫日期/状态漂移)
+ * @param {Object} objective - 候选目标任务 (Task)
+ * @param {string} expectedParentTagName - 预期的父级标签名称
+ * @returns {[boolean, Object|null]} - [是否拥有匹配的父级标签, 匹配到的Tag对象]
+ */
+function doesObjectiveHaveItsParentGoalTag(objective, expectedParentTagName) {
+    if (!objective || !expectedParentTagName) return [false, null];
+
+    const candidateTags = objective.getTags();
+    const candidateTaskName = objective.getName();
+
+    const foundParentTag = candidateTags.find(tag => {
+        const tagName = tag.getName();
+
+        // 核心身份漏斗验证 (AND 逻辑)
+        return isGoalTag(tagName) &&                                        // 1. 必须是合法的目标系统标签
+            !isTagOwnedByTaskName(tagName, candidateTaskName) &&         // 2. 绝对不能是候选目标自身的专属标签
+            areTagsForSameObjective(tagName, expectedParentTagName);     // 3. 核心标识必须与预期的父标签完全一致
+    });
+
+    return [foundParentTag !== undefined, foundParentTag || null];
+}
+
+function createSubsequentObjective(currentObjective, parentObjective, parentGoalTagName) {
+    const subsequentObjectiveName = assembleSubsequentObjectiveName(currentObjective.getName());
+
+    const [subsequentObjectiveExisting, existingSubsequentObjective, subsequentGoalTag] = subsequentObjectiveExists(currentObjective, subsequentObjectiveName)
+
+    if (subsequentObjectiveExisting) {
+        return [existingSubsequentObjective, subsequentGoalTag.getName(), false, subsequentGoalTag.getPermalink()]
+    } else {
+        const subsequentObjective = rtm.addTask(subsequentObjectiveName)
+            .setList(currentObjective.getList())
+            .setPriority(currentObjective.getPriority())
+            .setUrl(currentObjective.getUrl())// 第一步：仅继承兜底 URL
+            .setStartDate(new Date())
+            .setDueDate(getNthNextDayOfWeek(6, 1));
+
+        if (currentObjective.getParent()) {
+            subsequentObjective.setParent(currentObjective.getParent());
+        }
+
+        // add all tag except status tag and objecitve own goal tag
+        const currentTaskName = currentObjective.getName();
+
+        currentObjective.getTags().forEach(tag => {
+            const tagName = tag.getName();
+            // 1. 如果是状态标签，跳过
+            if (tagName.startsWith(CONFIG.TAGS.STATUS_TAG_PREFIX)) return;
+
+            // 2. 如果是前任(currentObjective)自己的专属标签，跳过
+            if (isTagOwnedByTaskName(tagName, currentTaskName)) return;
+
+            // 3. 【分层级精准拦截】：保护软链接，斩断流氓标签
+            if (!parentGoalTagName) {
+                // 场景 A【顶层目标】：本不该有任何父级标签。
+                // 无差别拦截所有遗留的目标标签，彻底切断无限克隆 Bug！
+                if (isGoalTag(tagName)) return;
+            } else {
+                // 场景 B【普通目标】：可能存在合法的多个父级标签（软链接）。
+                // 只精准拦截即将被替换的那个“旧的主父级标签”，保护其他软链接安全过渡！
+                if (isGoalTag(tagName) && areTagsForSameObjective(tagName, parentGoalTagName)) {
+                    return;
+                }
+            }
+
+            // 安全的其他标签（业务上下文、#work 等普通标签），放行复制
+            subsequentObjective.addTags(tagName);
+        });
+
+        if (parentObjective && parentGoalTagName) {
+            subsequentObjective.addTags(parentGoalTagName)//right
+            subsequentObjective.setUrl(parentObjective.getPermalink()); // 覆盖为绝对正确的父级 URL
+
+            const [parentObjectiveTypeTag, parentObjectiveEmoji] = getTaskTypeInfo(parentObjective);
+            const parentInfoNote = `${CONFIG.NOTE_PREFIX.PARENT_NOTE}${parentObjectiveEmoji}: ${parentObjective.getName()}\n📛${formatDateTimeWithWeekday(parentObjective.getDueDate())}\n🔗${parentObjective.getPermalink()}`;
+            updateNote(subsequentObjective, parentInfoNote, CONFIG.NOTE_PREFIX.PARENT_NOTE, null);//right
+        }
+
+        const goalTag_permalink = manageGoalTag(subsequentObjective);
+        const newGoalTag = goalTag_permalink[0];
+        const isGoalTagChanged = goalTag_permalink[1]
+        const newGoalTagPermalink = goalTag_permalink[2]
+        console.log(`为 "${currentObjective.getName()}" 创建了后续目标: "${subsequentObjectiveName}"`);
+        return [subsequentObjective, newGoalTag, isGoalTagChanged, newGoalTagPermalink]
+    }
+}
+
+function removeTagsFromTask(task, ...prefixToRemoves) {
+    let tagsToRemove = new Array();
+    prefixToRemoves.forEach(prefixToRemove => {
+        tagsToRemove = tagsToRemove.concat(task.getTags()
+            .map(tag => tag.getName())
+            .filter(tagName => tagName.startsWith(prefixToRemove)))
+    });
+
+    if (tagsToRemove.length > 0) {
+        task.removeTags(...tagsToRemove);
+    }
+}
+
+function isLastCharDigit(str) {
+    if (str.length === 0) return false;
+    const lastCharCode = str.charCodeAt(str.length - 1);
+    return lastCharCode >= 48 && lastCharCode <= 57;
+}
+
+function assembleSubsequentObjectiveName(currentObjectiveName) {
+    if (typeof currentObjectiveName !== 'string') {
+        throw new Error('currentObjectiveName must be a string');
+    }
+
+    if (currentObjectiveName.length === 0) {
+        throw new Error('currentObjectiveName should not be empty');
+    }
+
+    const pattern = /^(.*?)-(\d+)$/; // 匹配以 "-数字" 结尾的格式
+    const match = currentObjectiveName.match(pattern);
+
+    if (match) {
+        const prefix = match[1];
+        const numStr = match[2];
+        const incrementedNum = (parseInt(numStr, 10) + 1).toString();
+        return `${prefix}-${incrementedNum}`;
+    } else {
+        return `${currentObjectiveName}-1`;
+    }
+}
+
+/**
+ * 格式化当前目标（若无序号则补充 "-1"）并提取其父目标的名称和类型
+ * 
+ * @param {Object} currentObjective - 当前的 RTM 任务对象 (Task)
+ * @returns {[string, string|null]} - [父目标名称, 父目标类型标签(如果已到顶层则为 null)]
+ */
+function extractParentObjectiveNameAndType(currentObjective) {
+    if (!currentObjective) {
+        throw new Error('currentObjective is invalid!');
+    }
+
+    const currentObjectiveName = currentObjective.getName();
+    if (typeof currentObjectiveName !== 'string' || isEmpty(currentObjectiveName)) {
+        throw new Error('currentObjectiveName must be a non empty string');
+    }
+
+    let parentName = null;
+    // Step 1: currentObjectiveName是否以"-数字"结尾
+    const match = currentObjectiveName.match(/^(.*?)-\d+$/);
+    if (match) {
+        //如果匹配上了，那么parentName先确定为“-数字”之前的部分
+        parentName = match[1];
+    } else {
+        // 【副作用警告】如果没有匹配上，说明它是首个冲刺目标。
+        // 自动为其附加 "-1" 后缀，并更新当前目标的标签锚点
+        const newName = `${currentObjectiveName}-1`;
+        currentObjective.setName(newName);
+        manageGoalTag(currentObjective);
+
+        // 它的父目标名称就是原本未加 "-1" 的名称
+        parentName = currentObjectiveName;
+    }
+
+    // Step 2: 检查 parentName 是否以 OBJECTIVE_TYPES 中的某一项开头
+    for (let i = 0; i < CONFIG.TAGS.OBJECTIVE_TYPES.length; i++) {
+        const prefix = CONFIG.TAGS.OBJECTIVE_TYPES[i];
+
+        if (parentName.startsWith(prefix)) {
+            // Step 3: 如果不是第一个元素，尝试用目标类型数组的前一个元素替换，也就是父目标类型
+            if (i > 0) {
+                const replacedObjectiveType = CONFIG.TAGS.OBJECTIVE_TYPES[i - 1];
+                const replacedName = replacedObjectiveType + parentName.slice(prefix.length);
+                return [replacedName, replacedObjectiveType];
+            } else {// i = 0, 也就是已经到顶了，已经没有更高级的目标类型
+                // 如果已经是第一个元素，无法替换
+                return [parentName, null];
+            }
+        }
+    }
+
+    // Step 4: 没有匹配到任何 OBJECTIVE_TYPE 前缀，返回提取出的 parentName
+    return [parentName, null];
+}
+
+/**
+ * 如果 originalObjectiveName 不是以 "-数字" 结尾，则添加 "-1"，否则返回原字符串
+ * @param {string} originalObjectiveName - 原始字符串
+ * @returns {string} - 处理后的字符串
+ */
+function ensureSuffixWithOne(originalObjectiveName) {
+    if (typeof originalObjectiveName !== 'string') {
+        throw new Error('originalObjectiveName must be a string');
+    }
+
+    const isEndWithDashNumber = /^.*-\d+$/.test(originalObjectiveName);
+    return isEndWithDashNumber ? originalObjectiveName : originalObjectiveName + "-1";
+}
+
+/**
+ * 链接模式工作流 (原主逻辑)
+ * @param {Object[]} selectedTasks - 用户选中的所有任务。
+ */
+function runLinking(selectedTasks) {
+
+    const newObjectiveTypeTag = getObjectiveTypeTag(newObjectiveTypeTagNum);
+    let { objective, subtasks, isNew } = determineObjective(selectedTasks, objectiveName, newObjectiveTypeTag);
+    setObjectiveDueDate(objective, selectedDueDate);
+    setObjectiveStartDate(objective, selectedStartDate);
+
+    const goalTag_permalink = manageGoalTag(objective);
+    const goalTagName = goalTag_permalink[0];
+    const isGoalTagChanged = goalTag_permalink[1]
+    const permalink = goalTag_permalink[2]
+
+    // if there are subtasks selected
+    if (subtasks.length > 0) {
+        // new objective's list is first subtask's list
+        const targetListForSubTasks = isNew ? subtasks[0].getList() : objective.getList();
+        processSubTasks(subtasks, objective, goalTagName, targetListForSubTasks);
+    }
+
+    if (isGoalTagChanged) {
+        return rtm.newMessage(
+            `修改后的目标标签的永久链接`,
+            `${permalink}`
+        );
+    }
+}
+
+// ... [determineObjective, setObjectiveDueDate, manageGoalTag, processSubTasks 函数保持不变]
+function determineObjective(tasks, objectiveName, newObjectiveTypeTag) {
+    let objective = null;
+    let subtasks = [...tasks];
+    let isNew = false;
+
+    if (!objectiveName) {// not provide the objective name
+        objective = findMaximalObjective(tasks, CONFIG.TAGS.OBJECTIVE_TYPES);
+        if (objective) {
+            // if objective found, then remove object, others are subtasks
+            subtasks = tasks.filter(t => t.getId() !== objective.getId());// remove objective
+        } else if (tasks.length === 1) {
+            objective = tasks[0];
+            const taskName = objective.getName();
+            objective.setName(`${newObjectiveTypeTag}-${taskName}`).addTags(newObjectiveTypeTag);
+            subtasks = [];
+            isNew = true;
+        } else {
+            throw new Error("No objective found and no name provided to create a new one.");
+        }
+    } else {// provide the objective name, means all selected tasks are subtasks if there are tasks selected
+        // if no subtasks selected, create objective in inbox
+        let targetList = rtm.getInbox()
+        if (subtasks.length > 0) {// there are tasks selected as subtasks, create objective in first subtask's list
+            targetList = subtasks[0].getList();
+        }
+        objective = rtm.addTask(`${newObjectiveTypeTag}-${objectiveName}`).setList(targetList).addTags(newObjectiveTypeTag);
+        isNew = true;
+    }
+
+    return { objective, subtasks, isNew };
+}
+
+function setObjectiveDueDate(objective, selectedDueDate) {
+    const now = new Date();
+    if (selectedDueDate) {
+        if (selectedDueDate.getHours() === 0 && selectedDueDate.getMinutes() === 0 && selectedDueDate.getSeconds() === 0) {
+            objective.setDueDate(selectedDueDate);
+        } else {
+            objective.setDueTime(selectedDueDate);
+        }
+    } else if (!objective.getDueDate()) {
+        objective.setDueDate(now);
+    }
+}
+
+function setObjectiveStartDate(objective, selectedStartDate) {
+    console.log(`setObjectiveStartDate`)
+    if (selectedStartDate) {
+        if (selectedStartDate.getHours() === 0 && selectedStartDate.getMinutes() === 0 && selectedStartDate.getSeconds() === 0) {
+            objective.setStartDate(selectedStartDate);
+        } else {
+            objective.setStartTime(selectedStartDate);
+        }
+    } else if (!objective.getStartDate() && getTaskTypeInfo(objective)[0] === CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE) {
+        objective.setStartDate(new Date());
+    }
+}
+
+/**
+ * 智能目标标签管理 (锚点重命名模式)
+ * 核心机制：通过 Note 锁定 Tag 对象引用，优先尝试重命名 Tag 以保持子任务连接。
+ */
+function manageGoalTag(objective) {
+    // 1. 计算标准化的目标标签名
+    const dueDateStr = formatDate(objective.getDueDate());
+    // 确保 normalizeTaskName 已定义且能处理特殊字符
+    const normalizedName = normalizeTaskName(objective.getName(), CONFIG.CHAR_TO_REMOVE_FROM_NAME);
+    // 引入配置中的前缀
+    const openPrefix = CONFIG.TAGS.OBJECTIVE_TAG_OPEN_PREFIX;
+    const closePrefix = CONFIG.TAGS.OBJECTIVE_TAG_CLOSE_PREFIX;
+
+    const goalTagName = objective.isCompleted() ? `${closePrefix}${dueDateStr}_${normalizedName}` : `${openPrefix}${dueDateStr}_${normalizedName}`;
+
+    // 2. 寻找锚点 Note
+    let permalinkNote = objective.getNotes().find(note =>
+        note.getContent().startsWith(CONFIG.NOTE_PREFIX.TAG_PERMALINK)
+    );
+
+    let isGoalTagChanged = false;
+    let currentPermalink = "";
+
+    if (permalinkNote) {
+        // === 场景 A: 已纳管的目标 (有锚点) ===
+        const recordedPermalink = permalinkNote.getContent();
+
+        // 通过 Permalink 反查 Tag 对象 (这是唯一标识)
+        const existingTag = getGlobalTags().find(tag => tag.getPermalink() === recordedPermalink);
+
+        if (existingTag) {
+            // 2.1 找到了对应的 Tag 对象
+            if (existingTag.getName() !== goalTagName) {
+                console.log(`[Tag] 检测到漂移，准备重命名: ${existingTag.getName()} -> ${goalTagName}`);
+
+                // 🛑 冲突检查：检查新名字是否已被占用
+                const collisionTag = getGlobalTags().find(t => t.getName() === goalTagName);
+
+                if (collisionTag) {
+                    // [分支 A-1]: 命名冲突
+                    // 策略：放弃旧 Tag，切换到已存在的同名 Tag
+                    console.warn(`[Tag] 命名冲突。重命名已存在的同名Tag，并设置existingTag为新的Tag名称`);
+                    collisionTag.setName(collisionTag.getName() + "-⚠️");
+                    existingTag.setName(goalTagName);
+                    // 关键修复：移除旧标签，防止任务挂两个标
+                    permalinkNote.setContent(recordedPermalink.replace(/[^/]+$/, goalTagName));
+                    currentPermalink = permalinkNote.getContent();
+                    console.log(`currentPermalink ${currentPermalink}`)
+                } else {
+                    // [分支 A-2]: 无冲突，安全重命名 (最佳路径)
+                    // 核心价值：所有子任务自动跟随变更
+                    existingTag.setName(goalTagName);
+                    permalinkNote.setContent(recordedPermalink.replace(/[^/]+$/, goalTagName));
+                    currentPermalink = permalinkNote.getContent();
+                    console.log(`currentPermalink ${currentPermalink}`)
+                }
+                isGoalTagChanged = true;
+            } else {
+                // 名字没变，一切正常
+                currentPermalink = recordedPermalink;
+            }
+        } else {
+            // 2.2 锚点失效 (Tag 在 RTM 中被删除了，但 Note 还在)
+            console.warn(`[Tag] 锚点失效 (Tag丢失)，重新创建: ${goalTagName}`);
+
+            // 尝试查找是否已有同名 Tag (防止创建报错)
+            const sameNameTag = getGlobalTags().find(t => t.getName() === goalTagName);
+            let finalTag;
+
+            if (sameNameTag) {
+                finalTag = sameNameTag;
+            } else {
+                finalTag = rtm.addTag(goalTagName);
+                getGlobalTags().push(finalTag);
+            }
+
+            currentPermalink = finalTag.getPermalink();
+            permalinkNote.setContent(currentPermalink); // 修复 Note
+            isGoalTagChanged = true;
+        }
+    } else {
+        // === 场景 B: 新目标 (无锚点) ===
+        console.log(`[Tag] 新目标初始化: ${goalTagName}`);
+
+        // 同样检查同名 Tag
+        let targetTag = getGlobalTags().find(t => t.getName() === goalTagName);
+        if (!targetTag) {
+            targetTag = rtm.addTag(goalTagName);
+            getGlobalTags().push(targetTag);
+        }
+
+        currentPermalink = targetTag.getPermalink();
+
+        // 创建锚点 Note
+        objective.addNote(`${currentPermalink}`);
+        isGoalTagChanged = true;
+    }
+
+    // 3. 兜底：确保目标任务本身打上了这个标
+    // (addTags 是幂等的，如果已有则不会重复添加)
+    objective.addTags(goalTagName);
+
+    return [
+        goalTagName,
+        isGoalTagChanged,
+        currentPermalink
+    ];
+}
+
+function processSubTasks(subTasks, objective, goalTagName, targetList) {
+    const [objectiveTypeTag, objectiveEmoji] = getTaskTypeInfo(objective);
+    const objPermalink = objective.getPermalink();
+
+    subTasks.forEach(task => {
+        task.addTags(goalTagName);
+
+        if (objectiveTypeTag !== CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE) {
+            task.setUrl(objPermalink);
+        }
+
+        const parentInfoNote = `${CONFIG.NOTE_PREFIX.PARENT_NOTE}${objectiveEmoji}: ${objective.getName()}\n📛${formatDateTimeWithWeekday(objective.getDueDate())}\n🔗${objPermalink}`;
+        updateNote(task, parentInfoNote, CONFIG.NOTE_PREFIX.PARENT_NOTE, objPermalink);
+
+        const childInfoNote = createChildInfoNote(task);
+        updateNote(objective, childInfoNote, CONFIG.NOTE_PREFIX.CHILD_NOTE, task.getPermalink());
+
+        if (task.getList().getId() !== targetList.getId()) {
+            try {
+                // quickwin as virtual/soft objective
+                // if (objectiveTypeTag !== CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE) {
+                task.setList(targetList);
+                // }
+            } catch (error) {
+                console.error(`Error moving task "${task.getName()}" to list "${targetList.getName()}":`, error);
+            }
+        }
+    });
+}
+
+// =================================================================
+// 4. 辅助工具函数 (Utility Helper Functions)
+// =================================================================
+
+// ... [其他辅助函数保持不变]
+function isSyncMode(tasks) {
+    if (newObjectiveTypeTagNum || objectiveName || selectedDueDate || selectedStartDate) return false;
+
+    // 如果任务数量不是1，则直接返回false
+    if (tasks.length !== 1) return false;
+
+    const theObjective = tasks[0];
+    // 检查任务是否为目标类型，并获取其类型标签
+    const [isTaskObjective, typeTag] = doesTaskHoldAnyTag(theObjective, CONFIG.TAGS.OBJECTIVE_TYPES, CONFIG.TAGS.DEFAULT_TASK_TYPE);
+
+    // 如果任务不是目标类型，直接返回false
+    if (!isTaskObjective) return false;
+
+    /**
+     * 必须保持精确匹配，作为“自愈机制的触发门”。
+     * 如果目标的日期被修改导致了漂移，这里必须无情地返回 false，把任务踢回 runLinking 模式去执行 manageGoalTag 进行标签重命名。
+    */
+    return hasUpToDateGoalTag(theObjective)[0]
+}
+
+/**
+ * 目标必须拥有它自己的目标标签：截止日期 + 目标名称 = 目标标签
+ */
+function hasUpToDateGoalTag(objective) {
+    if (!objective) return [false, null];
+
+    const dueDate = objective.getDueDate();
+    if (!dueDate) return [false, null];
+
+    // 获取目标的截止日期
+    const dueDateStr = formatDate(dueDate);
+    // 获取标准化的目标名称
+    const normalizedName = normalizeTaskName(objective.getName(), CONFIG.CHAR_TO_REMOVE_FROM_NAME);
+    if (!normalizedName) {
+        return [false, null];
+    }
+
+    // 引入配置中的前缀
+    const openPrefix = CONFIG.TAGS.OBJECTIVE_TAG_OPEN_PREFIX;
+    const closePrefix = CONFIG.TAGS.OBJECTIVE_TAG_CLOSE_PREFIX;
+
+    const expectedGoalTagOpen = `${openPrefix}${dueDateStr}_${normalizedName}`;
+    const expectedGoalTagClose = `${closePrefix}${dueDateStr}_${normalizedName}`;
+
+    // 检查目标是否有符合条件的标签
+    const foundGoalTag = objective.getTags().find(tag => {
+        return tag.getName() === expectedGoalTagOpen || tag.getName() === expectedGoalTagClose
+    });
+
+    return [foundGoalTag !== undefined, foundGoalTag || null];
+}
+
+function createChildInfoNote(task, allTasks2findTaskDependencies = []) {
+    // 提取基础信息（带默认值）
+    const [typeLabel, taskEmoji] = getTaskTypeInfo(task) ?? ['', ''];
+    const taskName = task.getName();
+    const taskPermalink = task.getPermalink();
+    const isCompleted = isTaskConsideredAsCompleted(task);// keep use isTaskConsideredAsCompleted
+    const dueDate = formatDateTimeWithWeekday(task.getDueDate());
+    const priority = task.getPriority();
+    const estimateMinutes = task.getEstimate()?.getMinutes() ?? 0;
+
+    // 获取依赖任务
+    const dependencyIds = getDependencies(task);
+    const dependencyNotes = dependencyIds.length > 0 && allTasks2findTaskDependencies.length > 0
+        ? getDependencyTaskNames(dependencyIds, allTasks2findTaskDependencies)
+        : [];
+
+    // 构建内容片段
+    const lines = [
+        `${CONFIG.NOTE_PREFIX.CHILD_NOTE}${taskEmoji}: ${taskName}`,
+        `📈: ${isCompleted ? '✅' : '⭕'}`,
+        `📛: ${dueDate}`,
+        `❗: ${priority}`,
+        `⏳: ${estimateMinutes} min`,
+        `🔗: ${taskPermalink}`,
+        dependencyNotes.length > 0 ? `🚸: ${dependencyNotes.join('\n')}` : null
+    ];
+
+    return lines.filter(Boolean).join('\n');
+}
+
+function updateNote(task, newContent, prefix, suffix) {
+    if (isEmpty(prefix) && isEmpty(suffix)) {
+        throw new Error('At least one of prefix or suffix should be provided for searching note');
+    }
+
+    const notes = task.getNotes();
+    const findNote = (note) =>
+        (!prefix || note.getContent().startsWith(prefix)) &&
+        (!suffix || note.getContent().endsWith(suffix));
+
+    const existingNote = notes.find(findNote);
+
+    if (!existingNote) {
+        task.addNote(newContent);
+    } else if (existingNote.getContent() !== newContent) {
+        existingNote.delete();
+        task.addNote(newContent);
+    }
+}
+
+function findAndGetNoteContent(task, prefix) {
+    if (isEmpty(prefix)) {
+        throw new Error('prefix should be provided for searching note');
+    }
+
+    const notes = task.getNotes();
+    const findNote = (note) =>
+        (!prefix || note.getContent().startsWith(prefix))
+
+    const existingNote = notes.find(findNote);
+
+    if (existingNote) {
+        return existingNote.getContent().substring(prefix.length)
+    } else {
+        return null
+    }
+}
+
+function isEmpty(str) {
+    return !str || str.trim() === '';
+}
+
+function getTaskTypeInfo(task) {
+    const [, typeTag] = doesTaskHoldAnyTag(task, CONFIG.TAGS.OBJECTIVE_TYPES, CONFIG.TAGS.DEFAULT_TASK_TYPE);
+    const emoji = typeTag.substring(typeTag.lastIndexOf("-") + 1);
+    return [typeTag, emoji];
+}
+
+function isTaskConsideredAsCompleted(task) {
+    return isTaskReallyCompleted(task) || isTaskTaggedAsCompleted(task);
+}
+
+function isTaskTaggedAsCompleted(task) {
+    return doesTaskHoldAnyTag(task, CONFIG.TAGS.COMPLETED_STATUS)[0];
+}
+
+function isTaskReallyCompleted(task) {
+    return task.isCompleted()
+}
+
+/**
+ * 从 tasks 中找出具有最小 objectiveTypeTag 索引的 task；
+ * 如果有多个，根据 permalink/url 关系找出“最上层”的 task；
+ * 如果仍然有多个，按 permalink 中的 task ID 排序，取最早创建的。
+ *
+ * @param {Array<Task>} tasks - 任务数组
+ * @param {Array<string>} objectiveTypeTags - 从大到小排列的目标类型标签
+ * @returns {Task|null} - 找到的最大目标
+ */
+function findMaximalObjective(tasks, objectiveTypeTags) {
+    const tagIndexMap = new Map(objectiveTypeTags.map((tag, index) => [tag, index]));
+
+    // Step 1: 收集所有具有有效 tag 的 tasks
+    const candidates = tasks.reduce((acc, task) => {
+        for (const tag of task.getTags()) {
+            const index = tagIndexMap.get(tag.getName());
+            if (index !== undefined) {
+                acc.push({ task, index });
+                break; // 只取第一个有效 tag
+            }
+        }
+        return acc;
+    }, []);
+
+    if (candidates.length === 0) return null;
+
+    // Step 2: 找出具有最小 tag index 的 tasks
+    const minIndex = Math.min(...candidates.map(c => c.index));
+    const minIndexCandidates = candidates.filter(c => c.index === minIndex);
+
+    if (minIndexCandidates.length === 1) {
+        return minIndexCandidates[0].task;
+    }
+
+    const taskList = minIndexCandidates.map(c => c.task);
+
+    // Step 3: 构建映射表
+    const taskByUrl = new Map();
+    const taskByPermalink = new Map();
+
+    for (const task of taskList) {
+        const permalink = task.getPermalink();
+        const url = task.getUrl();
+
+        if (permalink) taskByPermalink.set(permalink, task);
+        if (url) taskByUrl.set(url, task);
+    }
+
+    // Step 4: 找出非子级任务
+    const nonChildTasks = taskList.filter(task => {
+        const permalink = task.getPermalink();
+        return !permalink || !taskByUrl.has(permalink);
+    });
+
+    if (nonChildTasks.length === 0) return null;
+    if (nonChildTasks.length === 1) return nonChildTasks[0];
+
+    // Step 5: 提取 ID 并排序
+    const extractTaskId = (task) => {
+        const permalink = task.getPermalink();
+        if (!permalink) return Infinity;
+        const match = permalink.match(/\/(\d+)$/);
+        return match ? parseInt(match[1], 10) : Infinity;
+    };
+
+    // 缓存 ID 避免重复计算
+    const tasksWithId = nonChildTasks.map(task => ({
+        task,
+        id: extractTaskId(task)
+    }));
+
+    tasksWithId.sort((a, b) => a.id - b.id);
+
+    return tasksWithId[0].task;
+}
+
+function doesTaskHoldAnyTag(task, tagNames, defaultReturnTag = '') {
+    const taskTags = task.getTags();
+    const matchedTag = tagNames.find(tagName => taskTags.some(t => t.getName() === tagName));
+    return [!!matchedTag, matchedTag || defaultReturnTag];
+}
+
+function getObjectiveTypeTag(inputNum) {
+    if (!inputNum || inputNum.trim() === "") {
+        return CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE;
+    }
+    const num = parseInt(inputNum.trim(), 10);
+    const indexMap = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5 };
+    if (!isNaN(num) && num in indexMap) {
+        return CONFIG.TAGS.OBJECTIVE_TYPES[indexMap[num]];
+    }
+    throw new Error(`Input must be empty or a number between 1 and 6.`);
+}
+
+function normalizeTaskName(taskName, charsToRemove) {
+    let result = taskName.toLowerCase().replace(/\s/g, '-');
+    for (const char of charsToRemove) {
+        result = result.split(char).join('');
+    }
+    return result;
+}
+
+function mapTasktoSubtasksThroughUrlAndPermalink(taskMap) {
+    const tasksHaveUrl = rtm.getTasks('hasURL:true');
+
+    // Create a reverse map from permalink to task
+    const permalinkToTaskMap = new Map();
+    for (const [task] of taskMap.entries()) {
+        permalinkToTaskMap.set(task.getPermalink(), task);
+    }
+
+    // Set to keep track of processed tasks
+    const processedTasks = new Set();
+
+    // Set to keep track of parents that have been checked for subtasks
+    const checkedParents = new Set();
+
+    let hasNewTasks = true;
+
+    while (hasNewTasks) {
+        hasNewTasks = false;
+
+        // Iterate over all keys in taskMap that have not been checked yet
+        for (const [parentTask] of [...taskMap.entries()]) {
+            // Skip already checked parent which children found
+            if (checkedParents.has(parentTask)) continue;
+
+            const currentSubtasks = taskMap.get(parentTask);
+
+            for (const t of tasksHaveUrl) {
+                // Skip already processed task which parent found
+                if (processedTasks.has(t)) continue;
+
+                const taskUrl = t.getUrl();
+                const parentFromUrl = permalinkToTaskMap.get(taskUrl);
+
+                if (parentFromUrl === parentTask) {
+                    if (!currentSubtasks.includes(t)) {
+                        currentSubtasks.push(t);
+                        taskMap.set(parentTask, currentSubtasks);
+                        // console.log(`Added ${t.getName()} as subtask of ${parentTask.getName()}`);
+
+                        // Ensure the new subtask has an entry in taskMap and permalinkToTaskMap
+                        if (!taskMap.has(t)) {
+                            taskMap.set(t, []);
+                            permalinkToTaskMap.set(t.getPermalink(), t);
+                            hasNewTasks = true; // Indicate that there are new tasks to process
+                            mapTaskToSubtasksRecursively(t, taskMap) // collect subtask tree of new task
+                        }
+                    }
+                    // Mark the task as processed
+                    processedTasks.add(t);
+                }
+            }
+
+            // Mark the parent task as checked
+            checkedParents.add(parentTask);
+        }
+    }
+    return taskMap;
+}
+
+function mapTaskToSubtasksRecursively(task, taskMap) {
+    if (!taskMap.has(task)) {
+        taskMap.set(task, task.getSubtasks());
+
+        const subtasks = task.getSubtasks();
+        if (subtasks && subtasks.length > 0) {
+            for (const subtask of subtasks) {
+                mapTaskToSubtasksRecursively(subtask, taskMap);
+            }
+        }
+    } else {
+        const subtasks = task.getSubtasks();
+        taskMap.get(task).push(...subtasks)
+        if (subtasks && subtasks.length > 0) {
+            for (const subtask of subtasks) {
+                mapTaskToSubtasksRecursively(subtask, taskMap);
+            }
+        }
+
+    }
+    return taskMap;
+}
+
+function mergeTasks(primaryTasks, secondaryTasks) {
+    const remainingSecondaryTasks = []
+    for (const secondaryTask of secondaryTasks) {
+        const secondaryTaskId = secondaryTask.getId();
+        if (!doPrimaryTasksContainSecondaryTask(primaryTasks, secondaryTaskId)) {
+            remainingSecondaryTasks.push(secondaryTask);
+        }
+    }
+
+    return primaryTasks.concat(remainingSecondaryTasks);
+}
+
+function doPrimaryTasksContainSecondaryTask(primaryTasks, secondaryTaskId) {
+    let doContain = false;
+    for (const primaryTask of primaryTasks) {
+        if (primaryTask.getId() === secondaryTaskId) {
+            doContain = true;
+            break;
+        }
+    }
+    return doContain;
+}
+
+function printMap(task2subtasksMap) {
+    task2subtasksMap.forEach((value, key, map) => {
+        for (const task of value) {
+            console.log(`${key.getName()} - ${task.getName()} `)
+        }
+    })
+}
+
+/**
+ * 为每个选中的任务，独立地、高效地构建其专属的任务依赖图。
+ *
+ * 这是新的主入口函数，它完美地平衡了性能和需求。
+ *
+ * @returns {Map<Task, Map<Task, Set<Task>>>}
+ * 一个Map，键是最初选中的任务(selectedTask)，
+ * 值是该任务对应的、完整的依赖图(taskGraph)。
+ */
+function buildIndividualTaskGraphs(selectedTasks) {
+    if (selectedTasks.length === 0) {
+        throw new Error("没有选中的任务。");
+    }
+
+    // =================================================================
+    // 步骤 1: 一次性准备工作 (One-time Global Setup)
+    // =================================================================
+    // (性能优化) 将昂贵的API调用仅执行一次，获取所有可能被链接的子任务。
+    const tasksHaveUrl = rtm.getTasks('hasURL:true');
+
+    // (性能优化) 预处理数据，构建一个可供全局复用的、高效的URL查找映射。
+    const urlToChildrenMap = new Map();
+    for (const task of tasksHaveUrl) {
+        const parentUrl = task.getUrl();
+        if (parentUrl) {
+            if (!urlToChildrenMap.has(parentUrl)) {
+                urlToChildrenMap.set(parentUrl, []);
+            }
+            urlToChildrenMap.get(parentUrl).push(task);
+        }
+    }
+
+    // =================================================================
+    // 步骤 2: 重复性工作 (Per-Task Execution)
+    // =================================================================
+    // 用于存储最终结果，每个 selectedTask 对应一个 graph。
+    const results = new Map();
+
+    for (const startTask of selectedTasks) {
+        // 为每个选中的任务，调用单图构建函数。
+        // **关键**: 将预处理好的 urlToChildrenMap 作为参数传入，避免重复计算。
+        const individualGraph = buildSingleTaskGraph(startTask, urlToChildrenMap);
+        results.set(startTask, individualGraph);
+    }
+
+    return results;
+}
+
+
+/**
+ * 从一个指定的起始任务开始，构建其完整的、独立的依赖图。
+ *
+ * 此函数使用高效的广度优先搜索(BFS)算法，并利用预先计算好的全局资源。
+ *
+ * @param {Task} startTask - 构建图的起始节点。
+ * @param {Map<string, Task[]>} urlToChildrenMap - (共享资源) 预处理好的 URL -> 子任务列表的映射。
+ * @returns {Map<Task, Set<Task>>} 一个表示该起始任务依赖图的Map。
+ */
+function buildSingleTaskGraph(startTask, urlToChildrenMap) {
+    const taskGraph = new Map();
+    // 队列和已处理集合都只针对本次独立的图构建。
+    const processingQueue = [startTask];
+    const processedTasks = new Set([startTask]);
+
+    while (processingQueue.length > 0) {
+        const currentTask = processingQueue.shift();
+
+        if (!taskGraph.has(currentTask)) {
+            taskGraph.set(currentTask, new Set());
+        }
+
+        // 查找直接子任务
+        const directSubtasks = currentTask.getSubtasks() || [];
+        // 高效查找链接子任务 (复用全局Map)
+        const linkedSubtasks = urlToChildrenMap.get(currentTask.getPermalink()) || [];
+
+        const allChildren = [...directSubtasks, ...linkedSubtasks];
+
+        for (const child of allChildren) {
+            taskGraph.get(currentTask).add(child);
+
+            // 如果子任务在本次构建中是第一次遇到，则加入队列
+            if (!processedTasks.has(child)) {
+                processedTasks.add(child);
+                processingQueue.push(child);
+            }
+        }
+    }
+
+    return taskGraph;
+}
+
+function adaptSortedTasksForUI(sortedTasks) {
+    return sortedTasks.slice().reverse();
+}
+
+/**
+ * 获取某个任务的依赖任务ID列表
+ */
+function getDependencies(task) {
+    const prefixOfTaskDependency = "dep:";
+    const dependencies = new Set();
+
+    for (const note of task.getNotes()) {
+        const content = note.getContent() ?? '';
+        if (!content.startsWith(prefixOfTaskDependency)) continue;
+
+        const match = content.match(/([^/]+)\/?$/);
+        const dependencyTaskId = match ? match[1] : null;
+
+        if (dependencyTaskId) {
+            dependencies.add(dependencyTaskId);
+        }
+    }
+
+    return Array.from(dependencies);
+}
+
+function topologicalSortIncompleteTasks(tasks, PRIORITY_MAP = {}) {
+    const incompleteTasks = tasks.filter(task => !isTaskConsideredAsCompleted(task));
+    if (incompleteTasks.length === 0) return [];
+
+    const PRIORITY = {
+        'High': 3,
+        'Medium': 2,
+        'Low': 1,
+        'NoPriority': 0,
+        undefined: 0,
+        null: 0,
+        ...PRIORITY_MAP
+    };
+
+    const graph = {};
+    const inDegree = {};
+    const taskIdMap = {};
+
+    // 1. 构建图 (这部分保持不变)
+    for (const task of incompleteTasks) {
+        const id = task.getId();
+        taskIdMap[id] = task;
+        graph[id] = [];
+        inDegree[id] = 0;
+    }
+
+    for (const task of incompleteTasks) {
+        const id = task.getId();
+        // 假设 getDependencies(task) 返回依赖的任务ID数组
+        const deps = getDependencies(task);
+
+        for (const depId of deps) {
+            // 只处理不完整任务列表中的依赖关系
+            if (taskIdMap[depId]) {
+                graph[depId].push(id); // 依赖 depId -> 依赖于它的 id
+                inDegree[id]++;
+            }
+        }
+    }
+
+    // 2. Kahn's Algorithm with a Priority Queue approach
+    // 'queue' 现在扮演一个“可执行任务”的优先队列
+    let queue = Object.keys(inDegree).filter(id => inDegree[id] === 0);
+    const sortedResult = [];
+
+    // 3. 修改核心循环逻辑
+    while (queue.length > 0) {
+        // 在每次迭代时，对整个可执行队列进行排序
+        // 以便总是能选出当前最优的任务
+        queue.sort((a, b) => {
+            const taskA = taskIdMap[a];
+            const taskB = taskIdMap[b];
+
+            const dateA = taskA.getDueDate();
+            const dateB = taskB.getDueDate();
+
+            const hasDueA = dateA instanceof Date && !isNaN(dateA);
+            const hasDueB = dateB instanceof Date && !isNaN(dateB);
+
+            // 规则1: 有截止日期的任务优先于没有截止日期的
+            if (hasDueA && !hasDueB) return -1;
+            if (!hasDueB && hasDueA) return 1;
+
+            // 规则2: 按截止日期排序 (更早的在前)
+            if (hasDueA && hasDueB) {
+                const dueDiff = dateA.getTime() - dateB.getTime();
+                if (dueDiff !== 0) return dueDiff;
+            }
+
+            // 规则3: 如果日期相同或都没有日期，按优先级排序 (更高的在前)
+            const priorityA = PRIORITY[taskA.getPriority()] ?? 0;
+            const priorityB = PRIORITY[taskB.getPriority()] ?? 0;
+            return priorityB - priorityA;
+        });
+
+        // 取出队列中当前最优的任务 (排序后的第一个)
+        const id = queue.shift();
+        sortedResult.push(taskIdMap[id]);
+
+        // 更新其邻居（依赖它的任务）的入度
+        for (const neighbor of graph[id] || []) {
+            inDegree[neighbor]--;
+            if (inDegree[neighbor] === 0) {
+                queue.push(neighbor);
+            }
+        }
+    }
+
+    // 4. 检查循环依赖 (保持不变)
+    if (sortedResult.length !== incompleteTasks.length) {
+        console.warn("存在循环依赖或依赖于已完成/不存在的任务，无法完全排序");
+        // 可以选择返回部分排序结果或进行其他处理
+        // 1. 找出所有已经被正常排好序的任务 ID
+        const sortedIds = new Set(sortedResult.map(t => t.getId()));
+
+        // 2. 从原始列表里，把那些因为死循环没被加进去的任务过滤出来
+        const remainingTasks = incompleteTasks.filter(t => !sortedIds.has(t.getId()));
+
+        // 3. 强行拼接到末尾返回，宁可它们在 Note 里排在最后，也绝不丢弃它们！
+        return sortedResult.concat(remainingTasks);
+    }
+
+    return sortedResult;
+}
+
+function sortTasksByStatusThenByDueDate(tasks) {
+    // 已完成任务排序逻辑保持不变
+    const completed = tasks.filter(task => isTaskConsideredAsCompleted(task));// keep use isTaskConsideredAsCompleted
+    const sortedCompleted = completed.sort((a, b) => {
+        const dateA = a.getDueDate();
+        const dateB = b.getDueDate();
+        const hasDueA = dateA instanceof Date && !isNaN(dateA);
+        const hasDueB = dateB instanceof Date && !isNaN(dateB);
+
+        if (!hasDueA && !hasDueB) return 0;
+        if (!hasDueA) return 1;
+        if (!hasDueB) return -1;
+
+        return dateB - dateA; // 降序
+    });
+
+    // 使用分层拓扑排序处理未完成任务
+    const sortedIncomplete = topologicalSortIncompleteTasks(tasks);
+
+    return [...sortedIncomplete, ...sortedCompleted];
+}
+
+function getDependencyTaskNames(dependencyTaskIds, allTaskItems) {
+    const dependencyTaskNames = []
+    // console.log(`dependencyTaskIds ${dependencyTaskIds}`)
+    for (const taskId of dependencyTaskIds) {
+        // console.log(`dependencyTaskId ${taskId}`)
+        const matchingTaskItem = allTaskItems.find(item => item.getId() === taskId)
+        if (matchingTaskItem !== undefined) {
+            dependencyTaskNames.push(matchingTaskItem.getName() + " - " + matchingTaskItem.getPermalink())
+        }
+    }
+    return dependencyTaskNames
+}
+
+function assembleAllTasksOfObjective(objective, individualTaskGraphs) {
+    const goalTag = hasUpToDateGoalTag(objective)[1]
+    // console.log(`goalTag is ${goalTag.getName()}`)
+
+    if (!goalTag) {
+        throw new Error(`Objective "${objective.getName()}" does not have a valid goalTag (starts with '0_' or '99_').`);
+    }
+
+    const [objectiveTypeTag, objectiveEmoji] = getTaskTypeInfo(objective);
+
+    let allTasksWithTagButNotHaveUrl = []
+    if (objectiveTypeTag === CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE) {
+        allTasksWithTagButNotHaveUrl = goalTag.getTasks();
+    } else {
+        allTasksWithTagButNotHaveUrl = goalTag.getTasks('hasURL:false');
+    }
+
+    // console.log(allTasksWithTagButNotHaveUrl.length)
+
+    let objectiveTaskGraph = individualTaskGraphs.get(objective)
+    const allSubtasksOfObjective = mergeTasks(allTasksWithTagButNotHaveUrl, Array.from(objectiveTaskGraph.keys()))
+
+    return allSubtasksOfObjective
+}
+
+function groupByCompletion(tasks) {
+    const completedAndIncomplete = new Map();
+    completedAndIncomplete.set('completed', []);
+    completedAndIncomplete.set('incomplete', []);
+
+    Array.from(tasks).forEach(task => {
+        if (isTaskConsideredAsCompleted(task)) {
+            completedAndIncomplete.get('completed').push(task);
+        } else {
+            completedAndIncomplete.get('incomplete').push(task);
+        }
+    });
+
+    return completedAndIncomplete;
+}
+
+/**
+ * 获取“接下来的第 n 个指定星期几”的日期对象
+ * @param {number} dayOfWeek - 星期几 (0=周日, 1=周一, ..., 6=周六)
+ * @param {number} [n=1] - 第几个目标星期几（正数表示未来，负数表示过去）
+ * @param {Date} [baseDate=new Date()] - 可选基准日期
+ * @param {boolean} [includeToday=false] - 是否将“今天”算作第一个匹配项
+ * @returns {Date}
+ */
+function getNthNextDayOfWeek(dayOfWeek, n = 1, baseDate = new Date(), includeToday = false) {
+    // 参数验证
+    if (typeof dayOfWeek !== 'number' || dayOfWeek < 0 || dayOfWeek > 6) {
+        throw new Error("Invalid dayOfWeek: must be an integer between 0 and 6.");
+    }
+    if (!Number.isInteger(n)) {
+        throw new Error("Invalid n: must be an integer.");
+    }
+
+    const date = new Date(baseDate);
+    const currentDay = date.getDay();
+
+    let diff;
+
+    if (n === 0) {
+        throw new Error("n cannot be zero.");
+    }
+
+    if (n > 0) {
+        // 正向查找：未来第 n 个
+        diff = (dayOfWeek - currentDay + 7) % 7;
+        if (diff === 0 && !includeToday) {
+            diff += 7; // 如果是今天且 includeToday 为 false，则跳过今天
+        }
+
+        date.setDate(date.getDate() + diff + 7 * (n - 1));
+    } else {
+        // 负向查找：过去第 |n| 个
+        diff = (currentDay - dayOfWeek + 7) % 7;
+        if (diff === 0 && !includeToday) {
+            diff += 7;
+        }
+
+        date.setDate(date.getDate() - diff - 7 * (-n - 1));
+    }
+
+    return date;
+}
+
+/**
+ * 从目标标签中安全提取出标准化的任务名称（剥离状态前缀和日期）。
+ * 完美抵御格式畸变、空串和恶意命名。
+ * 
+ * @param {string} tagName - 要解析的标签名 (例："0_2026-03-31_my-parent-task")
+ * @returns {string|null} - 提取出的标准名称，如果解析失败返回 null
+ */
+function extractNormalizedNameFromTag(tagName) {
+    // 1. 类型防御与空值防御
+    if (typeof tagName !== 'string' || tagName.trim() === '') {
+        return null;
+    }
+
+    const cleanTagName = tagName.trim().toLowerCase();
+    const prefixOpen = CONFIG.TAGS.OBJECTIVE_TAG_OPEN_PREFIX.toLowerCase();   // "0_"
+    const prefixClose = CONFIG.TAGS.OBJECTIVE_TAG_CLOSE_PREFIX.toLowerCase(); // "99_"
+
+    // 2. 状态前缀剥离
+    let withoutStatus = "";
+    if (cleanTagName.startsWith(prefixOpen)) {
+        withoutStatus = cleanTagName.substring(prefixOpen.length);
+    } else if (cleanTagName.startsWith(prefixClose)) {
+        withoutStatus = cleanTagName.substring(prefixClose.length);
+    } else {
+        return null; // 根本不是目标框架内的标签
+    }
+
+    // withoutStatus 现在的格式必然是："{DATE}_{NORMALIZED_NAME}"
+    // 因为 formatDate() 生成的日期格式是 "YYYY-MM-DD" 或 "N/A"，绝对不会包含 "_"
+    // 所以这里的第一个 "_" 绝对、100% 就是日期和名称的分界线！
+    const firstUnderscoreIndex = withoutStatus.indexOf('_');
+
+    // 3. 格式校验防御
+    if (firstUnderscoreIndex === -1) {
+        return null; // 缺少下划线定界符，属于损坏的畸形标签
+    }
+
+    // 4. 提取与二次校验
+    const extractedName = withoutStatus.substring(firstUnderscoreIndex + 1);
+
+    if (!extractedName) {
+        return null; // 防止提取出空字符串（如标签是 "0_2026-03-31_"）
+    }
+
+    return extractedName;
+}
+
+/**
+ * 终极判断：验证一个标签是否严格归属于指定的任务名称。
+ * 杜绝了任何形式的子串碰撞（Substring Collision）。
+ * 
+ * @param {string} tagName - 候选标签名称
+ * @param {string} rawTaskName - 任务的原始名称
+ * @returns {boolean}
+ */
+function isTagOwnedByTaskName(tagName, rawTaskName) {
+    // 1. 基础类型防御
+    if (typeof tagName !== 'string' || typeof rawTaskName !== 'string') {
+        return false;
+    }
+
+    // 2. 从标签中提取出不可篡改的“核心标识”
+    const extractedName = extractNormalizedNameFromTag(tagName);
+    if (!extractedName) {
+        return false; // 不是合法标签，直接否决
+    }
+
+    // 3. 按统一算法计算当前任务的预期“核心标识”
+    const expectedName = normalizeTaskName(rawTaskName, CONFIG.CHAR_TO_REMOVE_FROM_NAME);
+
+    // 4. 极端输入防御：如果任务名全是过滤字符(如 "()")，标准化后为空，禁止匹配
+    if (!expectedName) {
+        return false;
+    }
+
+    // 5. 绝对对齐：使用严格等于 === 进行验证
+    // 这一步彻底消灭了 endsWith 带来的 parent_my-task 撞车 my-task 的 Bug
+    return extractedName === expectedName;
+}
+
+/**
+ * 比较两个标签是否指向同一个实体目标。
+ * 完美免疫“任务状态变化 (0_ 变 99_)” 和 “截止日期漂移 (日期修改)”。
+ * 
+ * @param {string} tagA - 标签 A
+ * @param {string} tagB - 标签 B
+ * @returns {boolean}
+ */
+function areTagsForSameObjective(tagA, tagB) {
+    if (typeof tagA !== 'string' || typeof tagB !== 'string') {
+        return false;
+    }
+
+    const nameA = extractNormalizedNameFromTag(tagA);
+    const nameB = extractNormalizedNameFromTag(tagB);
+
+    // 必须两者都是合法目标标签，且核心标识完全一致
+    return nameA !== null && nameB !== null && nameA === nameB;
+}
+
+/**
+ * 判断一个标签名称是否是系统的目标标签 (以 0_ 或 99_ 开头)
+ * @param {string} tagName - 要判断的标签名称
+ * @returns {boolean}
+ */
+function isGoalTag(tagName) {
+    if (typeof tagName !== 'string') return false;
+
+    return tagName.startsWith(CONFIG.TAGS.OBJECTIVE_TAG_OPEN_PREFIX) ||
+        tagName.startsWith(CONFIG.TAGS.OBJECTIVE_TAG_CLOSE_PREFIX);
+}
+
+function getDirectIncompleteChildTasks(individualTaskGraphs, objective, goalTag, incompleteChildTasks) {
+    const objectiveTaskGraph = individualTaskGraphs.get(objective);
+    // 图中直接连接的节点（直接 RTM Subtask 或 直接 URL 关联）
+    const directGraphChildren = objectiveTaskGraph ? (objectiveTaskGraph.get(objective) || new Set()) : new Set();
+    const directGraphChildIds = new Set(Array.from(directGraphChildren).map(t => t.getId()));
+
+    // 纯粹通过 Tag 软关联的子节点
+    const [objTypeTag] = getTaskTypeInfo(objective);
+    const tagOnlyTasks = (objTypeTag === CONFIG.TAGS.DEFAULT_OBJECTIVE_TYPE)
+        ? goalTag.getTasks()
+        : goalTag.getTasks('hasURL:false');
+    const tagOnlyTaskIds = new Set(tagOnlyTasks.map(t => t.getId()));
+
+    // 合并出真正的第一层直接子任务
+    const directIncompleteChildTasks = incompleteChildTasks.filter(t => {
+        const id = t.getId();
+        return directGraphChildIds.has(id) || tagOnlyTaskIds.has(id);
+    });
+    return directIncompleteChildTasks;
+}
