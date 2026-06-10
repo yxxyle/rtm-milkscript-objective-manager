@@ -1,0 +1,153 @@
+// =================================================================
+// 1. 配置中心 (Configuration Center)
+// =================================================================
+const CONFIG = {
+    PROMPTS: {
+        RECLOCK: 'Do you want to reclocking?',
+        CREATE_NEW_TASK: 'Do you want to create new task to track time?',
+        DUE_DATE: 'When(default is now) do you want to due this/new task?',
+        START_NEW_TASK: 'Do you want to start new task now?',
+    },
+    TAGS: {
+        IN_PROGRESS: '2.3-in_progress',
+        STATUS_PREFIX: '2.',
+    }
+};
+
+
+// =================================================================
+// 2. 参数解析 (Argument Parsing)
+// =================================================================
+const doReclocking = rtm.args[CONFIG.PROMPTS.RECLOCK] ?? false;
+const doCreateNewTask = rtm.args[CONFIG.PROMPTS.CREATE_NEW_TASK] ?? false;
+const selectedDueDate = rtm.args[CONFIG.PROMPTS.DUE_DATE];
+const doStartNewTask = rtm.args[CONFIG.PROMPTS.START_NEW_TASK] ?? false;
+
+
+// =================================================================
+// 3. 主执行逻辑 (Main Execution)
+// =================================================================
+const selectedTasks = rtm.getSelectedTasks();
+if (selectedTasks.length === 0) {
+    throw new Error("没有选中任何任务。");
+}
+
+const now = new Date();
+
+selectedTasks.forEach(task => {
+    // 决定是否需要创建新任务
+    const shouldCreateNew = doCreateNewTask || task.isRecurring();
+
+    // 步骤 1: 确定要操作的目标任务（原始任务或其副本）
+    const targetTask = shouldCreateNew ? createCloneOfTask(task) : task;
+
+    // 步骤 2: 为目标任务设置开始/预估时间
+    if (shouldCreateNew) {
+        // 如果是新创建的任务副本
+        if (doStartNewTask) {
+            targetTask.setStartTime(now).setEstimate(null); // 立即开始，不带预估
+        } else {
+            targetTask.setStartDate(null).setEstimate(task.getEstimate()); // 不立即开始，继承原预估
+        }
+    } else {
+        // 如果是操作现有任务
+        if (doReclocking) {
+            targetTask.setStartTime(now).setEstimate(null); // 重新计时
+        } else if (!targetTask.hasStartTime()) {
+            // 仅当任务未开始时，才设置开始时间
+            targetTask.setStartTime(now).setEstimate(null);
+        }
+    }
+
+    // 步骤 3: 设置截止日期
+    setTaskDueDateTime(targetTask, task, selectedDueDate, {
+        isNew: shouldCreateNew,
+        isStartingNow: doStartNewTask
+    });
+
+    // 步骤 4: 更新状态标签为 "in_progress"
+    updateTaskStatusTag(targetTask, CONFIG.TAGS.STATUS_PREFIX, CONFIG.TAGS.IN_PROGRESS);
+
+    // delete current repeat of recurring task
+    if (task.isRecurring()) {
+        task.delete(false)
+    }
+
+    console.log(`任务 " {targetTask.getName()}" 已成功开始！`);
+});
+
+
+// =================================================================
+// 4. 辅助函数 (Helper Functions)
+// =================================================================
+
+/**
+ * 创建一个任务的副本，并复制关键属性。
+ * @param {object} originalTask - 原始 RTM 任务对象。
+ * @returns {object} 新创建的任务副本。
+ */
+function createCloneOfTask(originalTask) {
+    const newTask = rtm.addTask(originalTask.getName())
+        .setList(originalTask.getList())
+        .setUrl(originalTask.getUrl())
+        .setPriority(originalTask.getPriority());
+
+    if (originalTask.getParent()) {
+        newTask.setParent(originalTask.getParent());
+    }
+
+    // 复制笔记和标签
+    originalTask.getNotes().sort((a, b) => a.getCreatedDate() - b.getCreatedDate()).forEach(note => {
+        newTask.addNote(note.getContent());
+    });
+    originalTask.getTags().forEach(tag => {
+        newTask.addTags(tag.getName());
+    });
+
+    return newTask;
+}
+
+/**
+ * 安全地更新任务的状态标签。
+ * @param {object} task - 要修改的任务。
+ * @param {string} prefixToRemove - 要移除的标签前缀。
+ * @param {string} tagToAdd - 要添加的新标签。
+ */
+function updateTaskStatusTag(task, prefixToRemove, tagToAdd) {
+    const tagsToRemove = task.getTags()
+        .map(tag => tag.getName())
+        .filter(tagName => tagName.startsWith(prefixToRemove));
+
+    if (tagsToRemove.length > 0) {
+        task.removeTags(...tagsToRemove);
+    }
+    task.addTags(tagToAdd);
+}
+
+/**
+ * 为任务设置截止日期/时间。
+ * @param {object} taskToModify - 要修改的任务。
+ * @param {object} originalTask - 原始任务，用于参考。
+ * @param {Date} dueDate - 用户选择的截止日期。
+ * @param {object} options - 包含 isNew 和 isStartingNow 的布尔值选项。
+ */
+function setTaskDueDateTime(taskToModify, originalTask, dueDate, options) {
+    if (dueDate) {
+        // 用户指定了新的截止日期
+        const isDateOnly = dueDate.getHours() === 0 && dueDate.getMinutes() === 0 && dueDate.getSeconds() === 0;
+        if (isDateOnly) {
+            taskToModify.setDueDate(dueDate);
+        } else {
+            taskToModify.setDueTime(dueDate);
+        }
+    } else {
+        // 未指定截止日期时的默认行为
+        if (options.isNew && !options.isStartingNow) {
+            // 如果是新创建但不立即开始的任务，继承原截止日期
+            taskToModify.setDueTime(originalTask.getDueDate());
+        } else {
+            // 其他情况（如开始现有任务），截止日期设为现在
+            taskToModify.setDueTime(new Date());
+        }
+    }
+}
