@@ -175,20 +175,20 @@ function main() {
     // 1. 读取 RTM 参数 (Key 必须与脚本定义完全一致)
     // ============================================================
     // 布尔开关：用于快速生成报告
-    const isReportToday = rtm.args['a.💥 快捷：生成【今日】报告？'];
-    const isReportWeek = rtm.args['b.💥 快捷：生成【本周】报告？'];
-    const isReportNext1Week = rtm.args['c.🗓 快捷：生成【一周后】报告？'];
-    const isReportMonth = rtm.args['d.🗓 快捷：生成【本月】报告？'];
+    const isReportToday = rtm.args['a.💥 Quick: Generate [Today] Report?'];
+    const isReportWeek = rtm.args['b.💥 Quick: Generate [This Week] Report?'];
+    const isReportNext1Week = rtm.args['c.🗓 Quick: Generate [1 Week Later] Report?'];
+    const isReportMonth = rtm.args['d.🗓 Quick: Generate [This Month] Report?'];
 
     // 手动参数：用于自定义查询
     // 注意：specifiedDueDate 在逻辑处理中可能会被置空，所以用 let
-    let specifiedDueDate = rtm.args['e.📆 (可选) 指定基准截止日期'];
+    let specifiedDueDate = rtm.args['e.📆 (Optional) Specify Base Due Date'];
 
     // 原始的手动偏移输入
-    const rawOffsetNum = rtm.args['f.🔢 (高级) 偏移数值 (0=本周期末)'];
-    const rawOffsetUnit = rtm.args['g.📐 (高级) 偏移单位 (Tag)'];
-    const isReportTomorrow = rtm.args['h.💥 快捷：生成【明日】报告？'];
-    const isReportNext1Month = rtm.args['i.🈷️ 快捷：生成【一个月后】报告？'];
+    const rawOffsetNum = rtm.args['f.🔢 (Advanced) Offset Value (0=End of Period)'];
+    const rawOffsetUnit = rtm.args['g.📐 (Advanced) Offset Unit (Tag)'];
+    const isReportTomorrow = rtm.args['h.💥 Quick: Generate [Tomorrow] Report?'];
+    const isReportNext1Month = rtm.args['i.🈷️ Quick: Generate [1 Month Later] Report?'];
 
     // 配置参数
     const actionTag = rtm.args['x.🔧 (底层) 查询动作 (Due/Start)'];
