@@ -1,0 +1,35 @@
+const inputParameter = 'How many minutes do you want to estimate for this task? The default is 30 minutes.';
+const strNum = rtm.args[inputParameter];
+let num = 0;
+if (strNum.length === 0) {
+    num = 30;
+} else {
+    num = parseInt(strNum);
+}
+console.log(num);
+
+const emoji = '🍅';
+
+const selectedTasks = rtm.getSelectedTasks();
+
+if (selectedTasks.length === 0) {
+    throw new Error("There are no selected tasks.");
+}
+
+const suffix2append = '-' + (num / 30).toFixed(2) + emoji;
+
+const numOfHour = parseInt(num / 60);
+const numOfMinute = num % 60;
+const estimate = rtm.newEstimate(numOfHour, Math.round(numOfMinute))
+
+// const isEstimated = selectedTasks.some(task => task.getName().endsWith(emoji));
+
+selectedTasks.forEach(task => {
+    const isEstimated = task.getName().endsWith(emoji); // 独立判断每个任务
+    if (isEstimated) {
+        // 使用精确正则避免误伤包含 "-" 的正常任务名
+        task.setName(task.getName().replace(new RegExp(`-\\s*[0-9.]+${emoji}$`), `${suffix2append}`).trim()).setEstimate(estimate);
+    } else {
+        task.setName(`${task.getName()}${suffix2append}`).setEstimate(estimate)
+    }
+});
