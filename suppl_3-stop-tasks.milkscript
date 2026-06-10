@@ -1,0 +1,290 @@
+// =================================================================
+// 1. 配置中心 (Configuration Center)
+// =================================================================
+const CONFIG = {
+    PROMPTS: {
+        COMPLETE_TASK: "Do you want to complete task now?",
+        CREATE_SUBSEQUENT: "Do you want to create subsequent task?",
+        STATUS_TAG: "Select statusTag(input 2. to filter) for this/new task when you want to cancel/abandon/lost it?",
+        ESTIMATE_MINS: 'How many estimate minutes do you want to set for this task? default is calculated.',
+        DUE_DATE: 'When(default is now) do you want to due this/new task?',
+    },
+    TAGS: {
+        WITHOUT_ESTIMATE: ['2.7-cancelled', '2.10-abandon', '2.14-lost'],
+        IN_PROGRESS: '2.3-in_progress',
+        DONE: '2.4-done',
+        STATUS_PREFIX: '2.',
+    },
+    POMODORO: {
+        MINUTES_PER_SESSION: 30,
+        EMOJI: '🍏',
+    },
+    MILLISECONDS_IN_MINUTE: 60 * 1000,
+};
+
+// =================================================================
+// 2. 参数解析 (Argument Parsing)
+// =================================================================
+const doCompleteTask = rtm.args[CONFIG.PROMPTS.COMPLETE_TASK] ?? false;
+const doCreateSubsequentTask = rtm.args[CONFIG.PROMPTS.CREATE_SUBSEQUENT] ?? false;
+const givenEstimateStr = rtm.args[CONFIG.PROMPTS.ESTIMATE_MINS] || ""; // 默认为空字符串
+const statusTagArg = rtm.args[CONFIG.PROMPTS.STATUS_TAG];
+const statusTag = statusTagArg ? statusTagArg.getName() : CONFIG.TAGS.DONE; // 若未选择，则默认为 'done'
+const selectedDueDate = rtm.args[CONFIG.PROMPTS.DUE_DATE];
+
+// =================================================================
+// 3. 主执行逻辑 (Main Execution)
+// =================================================================
+const selectedTasks = rtm.getSelectedTasks();
+if (selectedTasks.length === 0) {
+    throw new Error("没有选中任何任务。");
+}
+
+const now = new Date();
+console.log(`开始处理 ${selectedTasks.length} 个任务...`);
+
+selectedTasks.forEach(task => {
+    try {
+        // 主流程现在非常清晰：计算 -> 重命名 -> 更新。
+        console.log(`正在处理任务: "${task.getName()}"`);
+
+        // 步骤 1: 确定要操作的目标任务（原始任务或其副本）
+        const isRecurring = task.isRecurring();
+        const targetTask = isRecurring ? createCloneOfTask(task) : task;
+
+        // 步骤 2: 计算最终花费的分钟数。将复杂的 if/else 逻辑封装到这个函数中。
+        const finalEstimateMinutes = calculateFinalEstimate(targetTask, givenEstimateStr, statusTag, now);
+
+        // 步骤 3: 设置任务的预估时间。
+        targetTask.setEstimate(rtm.newEstimate(0, finalEstimateMinutes));
+
+        // 步骤 4: 如果有有效花费时间，则重命名任务以记录工时。
+        renameTaskWithPomodoro(targetTask, finalEstimateMinutes);
+
+        // 步骤 5: 更新任务状态标签和截止日期。
+        updateTaskStatusTag(targetTask, CONFIG.TAGS.STATUS_PREFIX, statusTag);
+        setTaskDueDateTime(targetTask, selectedDueDate);
+
+
+        // 步骤 6: (可选) 标记任务为 RTM 的“已完成”。
+        if (doCompleteTask) {
+            targetTask.complete();
+        }
+
+        // 步骤 7: (可选) 创建一个后续的、可立即开始的新任务。
+        if (doCreateSubsequentTask) {
+            createSubsequentTask(targetTask);
+        }
+
+        // 8. delete current repeat if task is recurring task
+        if (isRecurring) {
+            task.delete(false)
+        }
+    } catch (e) {
+        // 健壮性提升：如果处理单个任务失败，打印错误并继续处理下一个。
+        console.error(`处理任务 "${task.getName()}" 时发生错误: ${e.message}`);
+    }
+});
+
+console.log("所有任务处理完毕。");
+
+
+// =================================================================
+// 4. 核心辅助函数 (Core Helper Functions)
+// =================================================================
+
+/**
+ * 计算任务最终花费的分钟数。
+ * 封装了所有关于“预估时间”的计算逻辑。
+ * @param {object} task - 当前任务对象。
+ * @param {string} estimateStr - 用户手动输入的预估分钟数字符串。
+ * @param {string} finalStatusTag - 任务的最终状态标签。
+ * @param {Date} now - 当前时间。
+ * @returns {number} 最终计算出的分钟数。
+ */
+function calculateFinalEstimate(task, estimateStr, finalStatusTag, now) {
+    // 如果任务状态是“无需计算预估”的类型，直接返回0。
+    if (CONFIG.TAGS.WITHOUT_ESTIMATE.includes(finalStatusTag)) {
+        return 0;
+    }
+
+    // 如果用户手动输入了预估时间，则使用该值。
+    if (estimateStr) {
+        return parseInt(estimateStr, 10) || 0;
+    }
+
+    // 如果未手动输入，则根据任务的截止日期动态计算。
+    const taskDueDate = task.getDueDate();
+    if (!taskDueDate) {
+        console.warn(`任务 "${task.getName()}" 因无截止日期，无法动态计算花费时间，预估设为0。`);
+        return 0;
+    }
+
+    const diffInMilliseconds = now.getTime() - taskDueDate.getTime();
+    const diffInMinutes = Math.round(diffInMilliseconds / CONFIG.MILLISECONDS_IN_MINUTE);
+    const currentEstimateInMinutes = task.getEstimate()?.getMinutes() ?? 0;
+    const newTotalMinutes = currentEstimateInMinutes + diffInMinutes;
+
+    console.log(`任务 "${task.getName()}" 动态计算：延期 ${diffInMinutes} 分钟，新预估为 ${Math.max(0, newTotalMinutes)} 分钟。`);
+
+    // 返回最终结果，确保不为负数。
+    return Math.max(0, newTotalMinutes);
+}
+
+/**
+ * 如果有有效花费时间，则为任务名追加番茄钟计数。
+ * @param {object} task - 当前任务对象。
+ * @param {number} estimateMinutes - 最终花费的分钟数。
+ */
+function renameTaskWithPomodoro(task, estimateMinutes) {
+    if (estimateMinutes <= 0) {
+        return;
+    }
+
+    const originalName = task.getName();
+    const pomodoroCount = (estimateMinutes / CONFIG.POMODORO.MINUTES_PER_SESSION).toFixed(2);
+    const suffix = `-${pomodoroCount}${CONFIG.POMODORO.EMOJI}`;
+
+    // 判断结尾是否已经有🍏
+    const hasBeenTerminated = originalName.endsWith(`${CONFIG.POMODORO.EMOJI}`);
+
+    if (hasBeenTerminated) {
+        // 🎯 关键修复：只匹配 "-数字🍏" 的结构，绝不贪婪越界
+        // 匹配横杠，加上一个或多个数字或小数点，加上苹果结尾
+        const safeRegex = new RegExp(`-[0-9.]+${CONFIG.POMODORO.EMOJI}$`);
+
+        task.setName(originalName.replace(safeRegex, `${suffix}`).trim());
+    } else {
+        task.setName(`${originalName}${suffix}`);
+    }
+}
+
+/**
+ * 如果有有效花费时间，则为任务名追加番茄钟计数。
+ * @param {object} task - 当前任务对象。
+ * @param {number} estimateMinutes - 最终花费的分钟数。
+ */
+function renameTaskWithPomodoro_(task, estimateMinutes) {
+    if (estimateMinutes <= 0) {
+        return;
+    }
+
+    const originalName = task.getName();
+    const pomodoroCount = (estimateMinutes / CONFIG.POMODORO.MINUTES_PER_SESSION).toFixed(2);
+    const suffix = `-${pomodoroCount}${CONFIG.POMODORO.EMOJI}`;
+
+    const hasBeenTerminated = originalName.endsWith(`${CONFIG.POMODORO.EMOJI}`);
+    if (hasBeenTerminated) {
+        task.setName(task.getName().replace(new RegExp(`-.*${CONFIG.POMODORO.EMOJI}$`), `${suffix}`).trim())
+    } else {
+        task.setName(`${originalName}${suffix}`);
+    }
+
+}
+
+/**
+ * 创建一个与原始任务关联的后续任务。
+ * @param {object} originalTask - 已处理完毕的原始任务。
+ */
+function createSubsequentTask(originalTask) {
+    // 🎯 同样使用安全的正则来剥离青苹果后缀，保留原始的西红柿
+    const safeRegex = new RegExp(`-[0-9.]+${CONFIG.POMODORO.EMOJI}$`);
+    const newTaskName = originalTask.getName().replace(safeRegex, '').trim();
+    const newTask = rtm.addTask(newTaskName)
+        .setList(originalTask.getList())
+        .setPriority(originalTask.getPriority())
+        .setUrl(originalTask.getUrl())
+        .setDueTime(new Date()); // 后续任务截止日期为现在
+
+    if (originalTask.getParent()) {
+        newTask.setParent(originalTask.getParent());
+    }
+
+    // 复制笔记和标签
+    originalTask.getNotes().forEach(note => newTask.addNote(note.getContent()));
+    originalTask.getTags().forEach(tag => newTask.addTags(tag.getName()));
+
+    // 将新任务状态设为“进行中”，确保它是一个可立即开始的状态
+    updateTaskStatusTag(newTask, CONFIG.TAGS.STATUS_PREFIX, CONFIG.TAGS.IN_PROGRESS);
+
+    console.log(`为 "${originalTask.getName()}" 创建了后续任务: "${newTaskName}"`);
+}
+
+/**
+ * 创建一个与原始任务关联的后续任务。
+ * @param {object} originalTask - 已处理完毕的原始任务。
+ */
+function createSubsequentTask_(originalTask) {
+    const newTaskName = originalTask.getName().split(`-${(originalTask.getEstimate()?.getMinutes() / CONFIG.POMODORO.MINUTES_PER_SESSION).toFixed(2)}${CONFIG.POMODORO.EMOJI}`)[0];
+    const newTask = rtm.addTask(newTaskName)
+        .setList(originalTask.getList())
+        .setPriority(originalTask.getPriority())
+        .setUrl(originalTask.getUrl())
+        .setDueTime(new Date()); // 后续任务截止日期为现在
+
+    if (originalTask.getParent()) {
+        newTask.setParent(originalTask.getParent());
+    }
+
+    // 复制笔记和标签
+    originalTask.getNotes().forEach(note => newTask.addNote(note.getContent()));
+    originalTask.getTags().forEach(tag => newTask.addTags(tag.getName()));
+
+    // 将新任务状态设为“进行中”，确保它是一个可立即开始的状态
+    updateTaskStatusTag(newTask, CONFIG.TAGS.STATUS_PREFIX, CONFIG.TAGS.IN_PROGRESS);
+
+    console.log(`为 "${originalTask.getName()}" 创建了后续任务: "${newTaskName}"`);
+}
+
+/**
+ * 安全地更新任务的状态标签。
+ * @param {object} task - 要修改的任务。
+ * @param {string} prefixToRemove - 要移除的标签前缀。
+ * @param {string} tagToAdd - 要添加的新标签。
+ */
+function updateTaskStatusTag(task, prefixToRemove, tagToAdd) {
+    const tagsToRemove = task.getTags()
+        .map(tag => tag.getName())
+        .filter(tagName => tagName.startsWith(prefixToRemove));
+
+    if (tagsToRemove.length > 0) {
+        task.removeTags(...tagsToRemove);
+    }
+    task.addTags(tagToAdd);
+}
+
+function createCloneOfTask(originalTask) {
+    const newTask = rtm.addTask(originalTask.getName())
+        .setList(originalTask.getList())
+        .setUrl(originalTask.getUrl())
+        .setPriority(originalTask.getPriority());
+
+    if (originalTask.getParent()) {
+        newTask.setParent(originalTask.getParent());
+    }
+
+    // 复制笔记和标签
+    originalTask.getNotes().sort((a, b) => a.getCreatedDate() - b.getCreatedDate()).forEach(note => {
+        newTask.addNote(note.getContent());
+    });
+    originalTask.getTags().forEach(tag => {
+        newTask.addTags(tag.getName());
+    });
+
+    return newTask;
+}
+
+function setTaskDueDateTime(taskToModify, dueDate) {
+    if (dueDate) {
+        // 用户指定了新的截止日期
+        const isDateOnly = dueDate.getHours() === 0 && dueDate.getMinutes() === 0 && dueDate.getSeconds() === 0;
+        if (isDateOnly) {
+            taskToModify.setDueDate(dueDate);
+        } else {
+            taskToModify.setDueTime(dueDate);
+        }
+    } else {
+        // 未指定截止日期时的默认行为, 截止日期设为现在
+        taskToModify.setDueTime(now);
+    }
+}
