@@ -1,14 +1,16 @@
 # RTM Objective Manager
 
-🇨🇳 专为Remember The Milk打造的自动化脚本，您的专属敏捷教练。它通过高精度排期引擎推演任务耗时，生成负载热力图。遇到排期溢出时，会自动提供智能削减或加班建议，并输出多维诊断报告，助您告别超载。 
-
-🇬🇧 An advanced Remember The Milk script acting as your Agile coach. It simulates schedules, generates workload heatmaps, and offers smart task-pruning or overtime advice when overloaded, helping you conquer burnout with deep reports.
+An advanced Remember The Milk script acting as your Agile coach. It simulates schedules, generates workload heatmaps, and offers smart task-pruning or overtime advice when overloaded, helping you conquer burnout with deep reports.
 
 ---
+## 📦 脚本列表 (Script Catalog)
 
-# 🎯 RTM Agile Coach (RTM 敏捷教练)
+| 脚本名称 | 简介 | 版本 | 文档 |
+| :--- | :--- | :---: | :---: |
+| [RTM Agile Coach](./scripts/rtm-agile-coach/script.js) | 个人敏捷教练，生成工作负载热力图与报告 | v1.2 | [📖 详情](./scripts/rtm-agile-coach/README.md) |
+| [RTM Task Starter](./scripts/rtm-task-starter/script.js) | 任务启动与重置计时器，智能处理重复任务 | v1.0 | [📖 详情](./scripts/rtm-task-starter/README.md) |
 
-[🇨🇳 简体中文 (Simplified Chinese)](#-简体中文) | [🇬🇧 English](#-english)
+# 🎯 RTM Agile Coach
 
 An advanced [Remember The Milk (RTM)](https://www.rememberthemilk.com/) automation script powered by MilkScript, acting as your personal Agile Coach. It simulates schedules, generates workload heatmaps, and offers smart task-pruning or overtime advice when overloaded, helping you conquer burnout with deep reports.
 
@@ -67,80 +69,37 @@ This project is open-source and available under the [MIT License](LICENSE).
 
 ---
 
-<br>
-
-# 🇨🇳 简体中文
-
-专为 [Remember The Milk (RTM)](https://www.rememberthemilk.com/) 打造的自动化 MilkScript 脚本，您的专属敏捷教练。它通过高精度排期引擎推演任务耗时，生成负载热力图。遇到排期溢出时，会自动提供智能削减或加班建议，并输出多维诊断报告，助您告别超载。
-
-## ✨ 核心亮点
-
-- **⏱️ 高精度排期引擎**：毫秒级模拟任务执行流程，严格扣除下班时间、周末及节假日，还原最真实的可用工作容量。
-- **🌡️ 可视化负载热力图**：在 RTM 笔记中直接渲染每日容量与负载图表（支持 Emoji 状态分级），瓶颈与空闲时段一目了然。
-- **🧠 自适应效率追踪**：告别“盲目预估”。脚本会自动分析过去 7/30/180 天的历史完成数据，计算真实的“工时膨胀率”，并具备针对“休假黑洞”和“新手期稀释”的智能熔断机制。
-- **✂️ 智能削减与补位**：当需求溢出时，基于加权归一化模型（目标优先级 + 任务优先级 + 时间紧迫度），精准建议您“推迟、移除或平移”哪些具体任务。
-- **🔋 疲劳感知加班建议**：基于设定的“疲劳折损率”（默认 0.8），为您计算真实的加班代价，并在深夜（如 21:00 后）触发强制休息熔断。
-- **📊 深度多层级报表**：自动生成渐进式披露报告——从抬头显示（HUD）、行动指南、深度诊断到原始明细，并在后台自动记录历史容量指标（CSV格式）供复盘使用。
-
-## 🚀 安装与设置
-
-1. **环境要求**：您需要拥有 **Remember The Milk Pro (高级账户)** 才能运行 MilkScript。
-2. **添加脚本**：
-   - 登录 RTM 网页版 -> 设置 (Settings) -> MilkScript。
-   - 新建一个脚本，将全部源码粘贴进编辑器。
-3. **配置 UI 参数**：根据代码中的 `rtm.args` 键值，在脚本设置中完整配置相应的用户输入项（例如：`a.💥 快捷：生成【今日】报告？` 等开关和下拉框）。
-
-## ⚙️ 个性化配置
-
-在开始运行之前，强烈建议您修改代码顶部的 `CONFIG` 对象，以匹配您真实的作息节律：
-
-```javascript
-const CONFIG = {
-    // 定义您的标准工作日
-    WORKDAY_CONFIG: {
-        startHour: 9,      // 上班时间：早 9:00
-        endHour: 18,       // 下班时间：晚 18:00
-        workingDays: [1, 2, 3, 4, 5], // 周一至周五工作
-        holidays: [],      // 特定节假日可在此添加 'YYYY-MM-DD'
-    },
-    ...
-};
-
-const OVERTIME_CONFIG = {
-    EFFICIENCY_FACTOR: 0.8, // 疲劳折损：加班1小时仅相当于正常 0.8 小时的产出
-    LATE_THRESHOLD: 21      // 深夜熔断：超过 21:00 建议放弃加班
-};
-```
-
-*注意：本脚本深度依赖特定的标签语法体系（如使用 `1.1-🔭` 标记目标类型，使用 `0_` 和 `99_` 前缀链接子任务）。使用前请确保您的标签管理系统与 `CONFIG.TAGS` 的定义兼容。*
-
-## 📖 使用指南
-
-在 RTM 网页或移动端运行脚本时，您可以：
-1. **快捷一键生成**：勾选参数面板上的快捷开关（如“今日”、“本周”、“本月”），直接一键生成对应周期的分析报告。
-2. **自定义基准日**：手动指定一个目标截止日期或使用相对偏移量（高级玩法）。
-3. **查看智能视图**：脚本运行后，会自动生成或更新诸如 `✨-本周-🎯🔍` 的智能列表（Smart List），方便您在侧边栏快速查阅。
-4. **阅读报告**：前往回收站（`♻️`）或 Inbox 查看自动生成的图文任务笔记，根据“行动指南 (Action Plan)”做出你的排期决策！
-
-## 📄 开源协议
-本项目完全开源，遵循 [MIT License](LICENSE) 协议。欢迎提交 PR 和 Issue！
-
----
-
-# 🧪 示例文案/Sample Copy
-```示例文案
+# 🧪 Sample Copy
+```Sample Copy
 🚀 ** 行动指南(Action Plan) ** 
 ------------------------------------------------------------
-⚠️【高压预警】需加班 (预测拥挤度 25%)
+⚠️【高压预警】需加班 (预测拥挤度 117%)
 
-🤔👉 **系统研判**: 任务堆积在休息/下班时段，导致局部加班 (全局其实有盈余)。
+🤔👉 **系统研判**: 暂未逾期，但总负荷已超标。
+   💪 **加班挽救方案**: 剩余 4 天，每晚需加班 **1.3h** (预计至 20:19)。
+      *(注: 建议展示的加班时间是“最优情况”（Best Case）：如果你白天尽力了，晚上还要补多少。)*
+      *(注: 已按 80% 疲劳效率计算，额外付出 64m 疲劳折损成本)*
 --------------------------------------------------
-💡 **诊断与建议**: 宏观总容量充裕 (仍有约 12.9h 盈余)。当前警报纯粹是因为**死线太紧**或**任务被锁定在休息日**。
-👉 **建议行动：无需删除任务。只需推迟死线，或将休息日任务平移至工作日，警报即可解除。**
+   ✂️ **减负建议**：为避免过度疲劳，建议削减约 **1.6h** 预估量（参考以下清单）。
+💡 **智能削减建议 (可腾出 2.5h)**:
+*(冲刺模式 (Sprint)模型: 30%目标 + 45%时间 + 25%任务)*
+---------------------------------------------
+    ✂️ 🔄移至 2026-06-10(周三) [P2 ⤷ 无] 
+     1.4-⛳-1.**步骤-5 ⤷ 4.发放*** (0m) 
+     ⏰82% | 2026-06-13 00:00:00 星期六
+---------------------------------------------
+    ✂️ 🔄移至 2026-06-10(周三) [P2 ⤷ 无] 
+     1.10-🎉-5.进入**“备战状态”（硬核突击） ⤷ 第三阶段：反向** -1.00🍅 (30m) 
+     ⏰54% | 2026-06-12 00:00:00 星期五
+---------------------------------------------
+    ✂️ 🔄移至 2026-06-10(周三) [P2 ⤷ P3] 
+     1.10-🎉-5.进入**“备战状态”（硬核突击） ⤷ 1.4、实践【***】-2.00🍅 (60m) 
+     ⏰54% | 2026-06-12 00:00:00 星期五
+
 ------------------------------------------------------------
 📊 ** 核心指标速览 **: 
-• 排期拥挤度: 24.9% 
-• 预测总耗时: 8.6 h(🔒0.5h) | 可用 34.5 h
+• 排期拥挤度: 117.1% 
+• 预测总耗时: 29.0 h(🔒0.5h) | 可用 24.8 h
   * (注: 预测耗时 = 任务加权工时 + 日程📅)*
 
 🧠 ** 深度诊断(Deep Diagnosis) ** 
