@@ -1,65 +1,68 @@
-# RTM Objective Manager
+# 🎯 RTM Agile Coach & Capacity Planner
 
-An advanced Remember The Milk script acting as your Agile coach. It simulates schedules, generates workload heatmaps, and offers smart task-pruning or overtime advice when overloaded, helping you conquer burnout with deep reports.
-
----
-
-# 🎯 RTM Agile Coach
-
-An advanced [Remember The Milk (RTM)](https://www.rememberthemilk.com/) automation script powered by MilkScript, acting as your personal Agile Coach. It simulates schedules, generates workload heatmaps, and offers smart task-pruning or overtime advice when overloaded, helping you conquer burnout with deep reports.
+An advanced, flagship Remember The Milk (RTM) automation script powered by MilkScript, acting as your personal Agile Coach. It deeply analyzes your task schedules, generates workload heatmaps, intelligently predicts your real-world efficiency, and offers smart task-pruning or fatigue-aware overtime advice when your system is overloaded.
 
 ## ✨ Features
-
-- **⏱️ Precision Scheduling Engine**: Simulates task execution with millisecond precision, strictly adhering to your configured working hours, weekends, and holidays.
-- **🌡️ Workload Heatmaps**: Visually displays your daily capacity and load, making it easy to spot bottlenecks and idle times at a glance.
-- **🧠 Adaptive Efficiency Tracking**: Automatically calculates your real-world "Work Ratio" by analyzing 7/30/180 days of historical data, complete with circuit breakers for vacations or data anomalies.
-- **✂️ Smart Triage & Pruning**: When your schedule overflows, it uses a weighted scoring model (Objective Priority + Task Priority + Urgency) to recommend exactly which tasks to drop, delay, or move to an empty slot.
-- **🔋 Fatigue-Aware Overtime Advice**: Calculates realistic overtime needs using an "Efficiency Factor" (e.g., 0.8), warning you of hidden cognitive costs and late-night hard stops.
-- **📊 Multi-layered Reporting**: Generates beautiful, structured notes in RTM (HUD, Action Plan, Deep Diagnosis, and Details) and logs historical metrics for long-term review.
+*   ⏱️ **Precision Capacity Engine:** Calculates your exact available working minutes strictly based on your configured working hours (e.g., 9-18), weekends, and holidays.
+*   🌡️ **Daily Workload Heatmaps:** Generates a visually intuitive, text-based daily heatmap (🟢 Free / 🟧 Saturated / 🩸 Overloaded). It accurately maps your tasks into available time slots to expose future bottlenecks.
+*   ✂️ **Smart Triage & Pruning Model:** Employs a weighted scoring system based on your horizon (Survival, Sprint, Project, or Vision modes). When overloaded, it analyzes Objective Priority, Task Priority, and Urgency to recommend exactly which tasks to drop, delay, or move to an empty slot.
+*   🔋 **Fatigue-Aware Overtime Advice:** Calculates realistic overtime needs using an "Efficiency Factor" (e.g., 0.8 hours of output per 1 hour of overtime), and enforces late-night hard stops (Circuit Breakers) to prevent burnout.
+*   🧠 **Adaptive Efficiency Tracking:** Automatically analyzes your historical 7/30/90/180 days of RTM task completion data to calculate your "Work Ratio". It features smart circuit breakers that adapt if you were on vacation or had data anomalies.
+*   📊 **Multi-Layered Actionable Reports:** Generates structured notes in a dedicated RTM log task: **HUD** (Status), **Action Plan** (Decisions), **Deep Diagnosis** (Heatmaps & Schedules), and **Details**. It also updates pinned multi-view Smart Lists for easy navigation.
 
 ## 🚀 Installation & Setup
 
-1. **Prerequisites**: You must have a **Remember The Milk Pro** account to use MilkScript.
-2. **Add Script**: 
-   - Go to your RTM Web App -> Settings -> MilkScript.
-   - Create a new script, copy and paste the entire source code into the editor.
-3. **Configure Parameters**: Set up the UI parameters (`rtm.args`) to match the script's input requirements (e.g., `a.💥 快捷：生成【今日】报告？`, `e.📆 (可选) 指定基准截止日期`).
+**Prerequisites:** You must have a Remember The Milk Pro account to use MilkScript.
+
+1.  **Add Script:**
+    *   Go to your RTM Web App -> Settings -> MilkScript.
+    *   Create a new script, copy, and paste the entire source code into the editor.
+2.  **Configure UI Parameters:** 
+    Set up the UI arguments (`rtm.args`) exactly as follows to match the script's inputs:
+    *   ☑️ `a.💥 Quick: Generate [Today] Report?` *(Type: Checkbox / Boolean)*
+    *   ☑️ `b.💥 Quick: Generate [This Week] Report?` *(Type: Checkbox / Boolean)*
+    *   ☑️ `c.🗓 Quick: Generate [1 Week Later] Report?` *(Type: Checkbox / Boolean)*
+    *   ☑️ `d.🗓 Quick: Generate [This Month] Report?` *(Type: Checkbox / Boolean)*
+    *   📆 `e.📆 (Optional) Specify Base Due Date` *(Type: Date/Time)*
+    *   🔢 `f.🔢 (Advanced) Offset Value (0=End of Period)` *(Type: Text / String)*
+    *   🏷️ `g.📐 (Advanced) Offset Unit (Tag)` *(Type: Tag)*
+    *   ☑️ `h.💥 Quick: Generate [Tomorrow] Report?` *(Type: Checkbox / Boolean)*
+    *   ☑️ `i.🈷️ Quick: Generate [1 Month Later] Report?` *(Type: Checkbox / Boolean)*
+    *   🏷️ `x.🔧 (Internal) Query Action (Due/Start)` *(Type: Tag)*
+    *   🏷️ `y.🔧 (Internal) Query Modifier (Before/After)` *(Type: Tag)*
+    *   ☑️ `z.🧪 Use Test List?` *(Type: Checkbox / Boolean)*
 
 ## ⚙️ Configuration
 
-Before running, customize the `CONFIG` object at the top of the script to fit your lifestyle:
+Before running, highly customize the `CONFIG` object at the top of the script to perfectly match your lifestyle and working habits:
 
 ```javascript
 const CONFIG = {
-    // Define your typical workday
     WORKDAY_CONFIG: {
-        startHour: 9,      // 9:00 AM
-        endHour: 18,       // 6:00 PM
-        workingDays: [1, 2, 3, 4, 5], // Mon to Fri
-        holidays: [],      // Add 'YYYY-MM-DD' for specific holidays
+        startHour: 9,      // Working day starts at 9:00 AM
+        endHour: 18,       // Working day ends at 6:00 PM
+        workingDays: [1, 2, 3, 4, 5], // Monday to Friday (0=Sun, 6=Sat)
+        holidays: [],      // Add 'YYYY-MM-DD' for personal holidays/leaves
     },
-    ...
+    // ...
 };
 
 const OVERTIME_CONFIG = {
-    EFFICIENCY_FACTOR: 0.8, // 1 hour of overtime ≈ 0.8 hours of output
-    LATE_THRESHOLD: 21      // Stop suggesting overtime after 9:00 PM
+    EFFICIENCY_FACTOR: 0.8, // 1 hour of overtime yields 0.8 hours of effective output
+    LATE_THRESHOLD: 21      // Stop suggesting overtime for today after 9:00 PM
 };
 ```
 
-*Note: The script heavily relies on specific tag structures (e.g., `1.1-🔭` for objectives, `0_` and `99_` prefixes for goal linking). Please ensure your RTM tagging system aligns with the `CONFIG.TAGS` definitions.*
-
 ## 📖 How to Use
 
-Run the script from the RTM web interface or mobile app. The script respects priority inputs:
-1. **Shortcuts**: Instantly generate reports for "Today", "Tomorrow", "This Week", or "This Month" via checkbox toggles.
-2. **Manual Dates**: Select a specific Due Date baseline.
-3. **Smart Lists**: The script automatically creates or updates Smart Lists (e.g., `✨-本周-🎯🔍`) pinned to your favorites for easy navigation.
-
-Read the generated Task Notes starting with `📊-System-Log` or your period names to get actionable advice!
+1.  **Quick Reports:** Trigger the script and simply check one of the shortcuts (e.g., `Generate [This Week] Report?`). The script will auto-calculate everything due by the end of this week.
+2.  **Custom Horizons:** Leave the shortcuts blank and use `Specify Base Due Date` or `Offset Value` to generate a report for exactly 45 days into the future.
+3.  **Review the HUD:** Check your RTM Inbox or `♻️` list for a task starting with the Period Name (e.g., `🛑 本周 | 159.5% | 逾期`). 
+4.  **Take Action:** Open the task notes to read the **Action Plan**. It will tell you exactly how many hours to cut and automatically recommend specific tasks to delay based on their strategic priorities!
+5.  **Smart Navigation:** Check your RTM left sidebar. The script will automatically create/update pinned Smart Lists (e.g., `☀️-今日计划-本周-🎯🔍`) for focused execution.
 
 ## 📄 License
-This project is open-source and available under the [MIT License](LICENSE).
+This project is open-source and available under the MIT License.
 
 ---
 
