@@ -159,7 +159,7 @@ const getSafeGlobalRatio = (objContext) => {
     };
 };
 
-const isUsingTestList = rtm.args['z.🧪 使用测试列表？'];
+const isUsingTestList = rtm.args['z.🧪 Use Test List?'];
 
 // quick test here
 // console.log(calculateWorkingMinutesBetween(now, new Date(now.getTime() + 54 * 60 * 60 * 1000), CONFIG.WORKDAY_CONFIG))
