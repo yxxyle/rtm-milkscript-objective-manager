@@ -1,0 +1,60 @@
+// =================================================================
+// 1. 配置中心 (Configuration Center)
+// =================================================================
+
+const CONFIG = {
+    TAGS: {
+        IN_PROGRESS: '2.3-in_progress',
+        ON_HOLD: '2.5-on_hold',
+    },
+    MILLISECONDS_IN_MINUTE: 60 * 1000,
+};
+
+
+// =================================================================
+// 2. 主执行逻辑 (Main Execution)
+// =================================================================
+
+const selectedTasks = rtm.getSelectedTasks();
+
+if (selectedTasks.length === 0) {
+    throw new Error("没有选中任何任务。");
+}
+
+const now = new Date();
+console.log(`开始处理 ${selectedTasks.length} 个任务...`);
+
+selectedTasks.forEach(task => {
+    const taskName = task.getName();
+    const taskDueDate = task.getDueDate();
+
+    // 健壮性检查: 如果任务没有截止日期，则跳过此任务
+    if (!taskDueDate) {
+        console.warn(`[跳过] 任务 "${taskName}" 因为没有设置截止日期。`);
+        return; // 使用 return 跳过 forEach 中的当前循环
+    }
+
+    // 1. 正确计算时间差 (单位：分钟)
+    // 通过时间戳计算毫秒差，然后转换为分钟，并四舍五入
+    const diffInMilliseconds = now.getTime() - taskDueDate.getTime();
+    const diffInMinutes = Math.round(diffInMilliseconds / CONFIG.MILLISECONDS_IN_MINUTE);
+
+    // 2. 简化并更新预估时间
+    // 使用可选链(?.)和空值合并(??)安全地获取当前预估时间（分钟），默认为0
+    const currentEstimateInMinutes = task.getEstimate()?.getMinutes() ?? 0;
+    const newTotalMinutes = currentEstimateInMinutes + diffInMinutes;
+
+    // 创建并设置新的预估时间。如果新总分钟数为负，则设为0，避免负预估。
+    const finalEstimateMinutes = Math.max(0, newTotalMinutes);
+    const newEstimate = rtm.newEstimate(0, finalEstimateMinutes);
+    task.setEstimate(newEstimate);
+
+    // 3. 链式调用更新任务状态，并使用常量
+    task.setDueTime(now)
+        .removeTags(CONFIG.TAGS.IN_PROGRESS)
+        .addTags(CONFIG.TAGS.ON_HOLD);
+
+    console.log(`[成功] 任务 "${taskName}" 已更新。延期 ${diffInMinutes} 分钟，新预估为 ${finalEstimateMinutes} 分钟。`);
+});
+
+console.log("所有任务处理完毕。");
