@@ -67,88 +67,88 @@ This project is open-source and available under the MIT License.
 ---
 
 # 🧪 Sample Copy
-```Sample Copy
-🚀 ** 行动指南(Action Plan) ** 
+```text
+🚀 ** Action Plan ** 
 ------------------------------------------------------------
-⚠️【高压预警】需加班 (预测拥挤度 117%)
+⚠️ [High Pressure] Overtime Required (Projected Congestion: 117%)
 
-🤔👉 **系统研判**: 暂未逾期，但总负荷已超标。
-   💪 **加班挽救方案**: 剩余 4 天，每晚需加班 **1.3h** (预计至 20:19)。
-      *(注: 建议展示的加班时间是“最优情况”（Best Case）：如果你白天尽力了，晚上还要补多少。)*
-      *(注: 已按 80% 疲劳效率计算，额外付出 64m 疲劳折损成本)*
+🤔👉 **System Assessment**: Not yet overdue, but total load exceeds capacity.
+   💪 **Overtime Rescue Plan**: 4 days remaining, requires **1.3h** of overtime per night (Estimated until 20:19).
+      *(Note: The suggested overtime is the "Best Case": how much you need to catch up at night assuming you maxed out your daytime hours.)*
+      *(Note: Calculated at 80% fatigue efficiency, costing an additional 64m of fatigue loss)*
 --------------------------------------------------
-   ✂️ **减负建议**：为避免过度疲劳，建议削减约 **1.6h** 预估量（参考以下清单）。
-💡 **智能削减建议 (可腾出 2.5h)**:
-*(冲刺模式 (Sprint)模型: 30%目标 + 45%时间 + 25%任务)*
+   ✂️ **Load Reduction Advice**: To avoid severe fatigue, recommend cutting approx. **1.6h** of estimated work (see list below).
+💡 **Smart Pruning Recommendations (Frees up 2.5h)**:
+*(Sprint Model: 30% Objective + 45% Time + 25% Task)*
 ---------------------------------------------
-    ✂️ 🔄移至 2026-06-10(周三) [P2 ⤷ 无] 
-     1.4-⛳-1.**步骤-5 ⤷ 4.发放*** (0m) 
-     ⏰82% | 2026-06-13 00:00:00 星期六
+    ✂️ 🔄 Move to 2026-06-10 (Wed) [P2 ⤷ None] 
+     1.4-⛳-1.**Step-5 ⤷ 4.Distribute*** (0m) 
+     ⏰82% | 2026-06-13 00:00:00 Saturday
 ---------------------------------------------
-    ✂️ 🔄移至 2026-06-10(周三) [P2 ⤷ 无] 
-     1.10-🎉-5.进入**“备战状态”（硬核突击） ⤷ 第三阶段：反向** -1.00🍅 (30m) 
-     ⏰54% | 2026-06-12 00:00:00 星期五
+    ✂️ 🔄 Move to 2026-06-10 (Wed) [P2 ⤷ None] 
+     1.10-🎉-5.Enter** "Readiness State" (Hardcore) ⤷ Phase 3: Reverse** -1.00🍅 (30m) 
+     ⏰54% | 2026-06-12 00:00:00 Friday
 ---------------------------------------------
-    ✂️ 🔄移至 2026-06-10(周三) [P2 ⤷ P3] 
-     1.10-🎉-5.进入**“备战状态”（硬核突击） ⤷ 1.4、实践【***】-2.00🍅 (60m) 
-     ⏰54% | 2026-06-12 00:00:00 星期五
+    ✂️ 🔄 Move to 2026-06-10 (Wed) [P2 ⤷ P3] 
+     1.10-🎉-5.Enter** "Readiness State" (Hardcore) ⤷ 1.4, Practice [***] -2.00🍅 (60m) 
+     ⏰54% | 2026-06-12 00:00:00 Friday
 
 ------------------------------------------------------------
-📊 ** 核心指标速览 **: 
-• 排期拥挤度: 117.1% 
-• 预测总耗时: 29.0 h(🔒0.5h) | 可用 24.8 h
-  * (注: 预测耗时 = 任务加权工时 + 日程📅)*
+📊 ** Core Metrics Overview **: 
+• Schedule Congestion: 117.1% 
+• Projected Time Needed: 29.0h (🔒0.5h) | Available: 24.8h
+  * (Note: Projected Time = Weighted Task Hours + Calendar Events 📅)*
 
-🧠 ** 深度诊断(Deep Diagnosis) ** 
+🧠 ** Deep Diagnosis ** 
 ------------------------------------------------------------
-📅 **实时战略排期推演 (Schedule)**
-   • 预计完工: 2026-06-06 10:06:15 星期六
-   *（注：排期表展示的预计完工是“最坏情况”（Worst Case）：如果你白天完全没时间做这个任务，晚上要搞到几点。）*
-   🟢 [06-02(二) 10:29 - 10:39] 检查****回复-0.33🍅 (10m)
-   🟢 [06-02(二) 10:39 - 11:39] 查询****材料？-1.00🍅 (30m)
-   🟢 [06-02(二) 11:39 - 13:40] 2.2.5-如何****-2.00🍅 (60m)
-   🟢 [06-02(二) 13:40 - 15:40] 3-2-1-在****更新****-2.00🍅 (60m)
-   🟢 [06-03(三) 09:00 - 09:05] 3.****验证-0.17🍅 (5m)
-   🟢 [06-03(三) 09:05 - 09:35] 弄清楚****是什么-1.00🍅 (30m)
-   🟢 [06-03(三) 09:35 - 09:40] 3.****验证-0.17🍅 (5m)
-   🟢 [06-03(三) 09:40 - 11:40] 准备****材料-2.00🍅 (60m)
-   🟢 [06-04(四) 09:00 - 09:05] 3.****验证-0.17🍅 (5m)
-   🟢 [06-05(五) 09:00 - 09:05] 3.****验证-0.17🍅 (5m)
-   ➖➖➖➖➖➖ 🧨 标准容量耗尽 (转入加班推演) ➖➖➖➖➖➖
-   🧨 [06-06(六) 10:00 - 10:06] 3.****验证-0.17🍅 (5m) (加班)
-      ↳ 📉 **阻塞瓶颈**: 高顺位任务占据加班通道，后续2任务被迫顺延。
-   🧨 [06-06(六) 10:06 - 10:06] 4.发放**** (0m) (加班)
-   🧨 [06-06(六) 10:06 - 10:06] 4.发放**** (0m) (加班)
-   • 目标死线: 2026-06-06 23:59:59 星期六
-
-------------------------------------------------------------
-🌡️ **每日实时战略负载热力 (Load Heatmap)**
-   🟨 06-02(二):   69% [  5.2/  7.5h]  🟢空闲2.3h
-   🟩 06-03(三):   35% [  3.2/  9.0h] 🔒含日程📅(0.5h)  🟢空闲5.8h
-   🟩 06-04(四):    1% [  0.1/  9.0h]  🟢空闲8.9h
-   🟩 06-05(五):    1% [  0.1/  9.0h]  🟢空闲8.9h
-   🧨 06-06(六):   N/A [  0.1/  0.0h] 🧨加班0.1h
+📅 **Real-time Tactical Schedule Deduction**
+   • Estimated Completion: 2026-06-06 10:06:15 Saturday
+   * (Note: The estimated completion in the schedule is the "Worst Case": if you have absolutely no time during the day, how late at night you will have to push this.)*
+   🟢 [06-02 (Tue) 10:29 - 10:39] Check **** reply -0.33🍅 (10m)
+   🟢 [06-02 (Tue) 10:39 - 11:39] Query **** materials? -1.00🍅 (30m)
+   🟢 [06-02 (Tue) 11:39 - 13:40] 2.2.5-How to **** -2.00🍅 (60m)
+   🟢 [06-02 (Tue) 13:40 - 15:40] 3-2-1-Update **** at **** -2.00🍅 (60m)
+   🟢 [06-03 (Wed) 09:00 - 09:05] 3.**** Verification -0.17🍅 (5m)
+   🟢 [06-03 (Wed) 09:05 - 09:35] Figure out what **** is -1.00🍅 (30m)
+   🟢 [06-03 (Wed) 09:35 - 09:40] 3.**** Verification -0.17🍅 (5m)
+   🟢 [06-03 (Wed) 09:40 - 11:40] Prepare **** materials -2.00🍅 (60m)
+   🟢 [06-04 (Thu) 09:00 - 09:05] 3.**** Verification -0.17🍅 (5m)
+   🟢 [06-05 (Fri) 09:00 - 09:05] 3.**** Verification -0.17🍅 (5m)
+   ➖➖➖➖➖➖ 🧨 Standard Capacity Exhausted (Switching to Overtime Deduction) ➖➖➖➖➖➖
+   🧨 [06-06 (Sat) 10:00 - 10:06] 3.**** Verification -0.17🍅 (5m) (Overtime)
+      ↳ 📉 **Bottleneck**: High-priority tasks are occupying the overtime channel, forcing 2 subsequent tasks to be delayed.
+   🧨 [06-06 (Sat) 10:06 - 10:06] 4.Distribute **** (0m) (Overtime)
+   🧨 [06-06 (Sat) 10:06 - 10:06] 4.Distribute **** (0m) (Overtime)
+   • Objective Deadline: 2026-06-06 23:59:59 Saturday
 
 ------------------------------------------------------------
-🕵️ **日程📅审计 (Blocking Audit)**
-   *(没有未设置明确的开始时间/预估的日程📅)*
+🌡️ **Daily Real-time Load Heatmap**
+   🟨 06-02 (Tue):  69% [ 5.2/ 7.5h] 🟢 Free 2.3h
+   🟩 06-03 (Wed):  35% [ 3.2/ 9.0h] 🔒 Incl. Event📅(0.5h) 🟢 Free 5.8h
+   🟩 06-04 (Thu):   1% [ 0.1/ 9.0h] 🟢 Free 8.9h
+   🟩 06-05 (Fri):   1% [ 0.1/ 9.0h] 🟢 Free 8.9h
+   🧨 06-06 (Sat):  N/A [ 0.1/ 0.0h] 🧨 Overtime 0.1h
 
 ------------------------------------------------------------
-📊 **实时战略容量分析 (Capacity)**
-   • 实际📍需求: 8.1h (原始 4.6h +77%)
-     ↳ 算式: ∑ (预估 × 效率) / 60
-     ↳ 详情:
+🕵️ **Calendar Blocking Audit📅**
+   *(No calendar events without clear start time/estimates📅)*
+
+------------------------------------------------------------
+📊 **Real-time Tactical Capacity Analysis**
+   • Actual📍Demand: 8.1h (Raw 4.6h +77%)
+     ↳ Formula: ∑ (Estimate × Efficiency) / 60
+     ↳ Details:
        • 1.5-📌-****: 1.50h × 2.00🌐 = 3.00h
-       • 1.5-📌-1.将****准备好-7: 1.00h × 2.01🎯 = 2.01h
-       • 1.10-🎉-3.更新****: 1.00h × 2.00🌐 = 2.00h
-       • 1.4-⛳-1.****步骤-4: 1.08h × 1.00🎯 = 1.08h
-   • 日程📅占用: 🔒0.5h
-   • 可用🟢容量: 34.5h (截止 2026-06-06)
+       • 1.5-📌-1.Get **** ready-7: 1.00h × 2.01🎯 = 2.01h
+       • 1.10-🎉-3.Update ****: 1.00h × 2.00🌐 = 2.00h
+       • 1.4-⛳-1.**** Step-4: 1.08h × 1.00🎯 = 1.08h
+   • Calendar📅 Blocked: 🔒0.5h
+   • Available🟢 Capacity: 34.5h (Until 2026-06-06)
 
 ------------------------------------------------------------
-📉 ** 历史习惯分析 **: 
-🕰️📈🌡️: **纯产能与吞吐量评估 (Velocity Check)** (截止于 2026-06-06 23:59:59)
-待办纯预估：275m | 基于历史均速的吞吐饱和度：26.6%
-待办纯预估：275m < 预计可消化纯预估: 1033.65m (算式: 剩余3.83天 × 日均269.63m)
-👉 **产能结论**: 🟢 本周期 可适当增加 约 758.65 分钟的纯预估量。
+📉 ** Historical Habit Analysis **: 
+🕰️📈🌡️: **Raw Capacity & Throughput Evaluation (Velocity Check)** (Until 2026-06-06 23:59:59)
+Pending Raw Estimate: 275m | Throughput Saturation based on Historical Velocity: 26.6%
+Pending Raw Estimate: 275m < Expected Digestible Raw Estimate: 1033.65m (Formula: 3.83 Days Remaining × 269.63m Daily Avg)
+👉 **Velocity Conclusion**: 🟢 For this cycle, you can safely add approx. 758.65 minutes of raw estimate.
 ```
