@@ -1,4 +1,4 @@
-const inputParameter = 'How many minutes do you want to estimate for this task? The default is 30 minutes.';
+const inputParameter = 'How many minutes do you plan to estimate for this task? The default is 30 minutes.';
 const strNum = rtm.args[inputParameter];
 let num = 0;
 if (strNum.length === 0) {
